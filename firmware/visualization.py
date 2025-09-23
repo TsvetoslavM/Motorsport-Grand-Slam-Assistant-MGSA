@@ -275,7 +275,7 @@ def plotly_curvature_heatmap_3d_html(points, curvatures, output_html, title="Cur
     return True
 
 
-def plotly_track_outline_from_widths_html(centerline_with_widths, output_html, title="Track Outline (web)", smooth_iterations: int = 2):
+def plotly_track_outline_from_widths_html(centerline_with_widths, output_html, title="Track Outline (web)", smooth_iterations: int = 2, raceline_points=None):
     """Draw left/right edges from centerline and per-point left/right widths.
 
     centerline_with_widths: list of (x, y, left_width, right_width)
@@ -335,20 +335,20 @@ def plotly_track_outline_from_widths_html(centerline_with_widths, output_html, t
         right_edge = _chaikin_open(right_edge, iterations=smooth_iterations)
 
     fig = go.Figure()
-    # Draw left and right edges as black outlines with white inner stroke
-    for edge, name in [(left_edge, "Left Edge"), (right_edge, "Right Edge")]:
-        ex, ey = edge[:,0], edge[:,1]
-        fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", name=name,
-                                 line=dict(color="black", width=12), hoverinfo="skip", showlegend=False))
-        fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines",
-                                 line=dict(color="white", width=8), hoverinfo="skip", showlegend=False))
-
-    # Close the outline by connecting right edge back to left edge
+        # Close the outline by connecting right edge back to left edge
     poly_x = list(left_edge[:,0]) + list(right_edge[::-1,0]) + [left_edge[0,0]]
     poly_y = list(left_edge[:,1]) + list(right_edge[::-1,1]) + [left_edge[0,1]]
     fig.add_trace(go.Scatter(x=poly_x, y=poly_y, mode="lines", name="Outline",
-                             line=dict(color="black", width=2), hoverinfo="skip", showlegend=False, opacity=0.2))
+                             line=dict(color="black", width=10), hoverinfo="skip", showlegend=True, opacity=0.2))
+    if raceline_points is not None:
+        rp = np.asarray(raceline_points, dtype=float)
+        if len(rp) >= 2:
+            rp_sm = _chaikin_open(rp, iterations=smooth_iterations)
+            rx, ry = rp_sm[:,0], rp_sm[:,1]
+            fig.add_trace(go.Scatter(x=rx, y=ry, name="Racing line", mode="markers",
+                                     marker=dict(color="white", size=1, line=dict(color="blue", width=1)),
+                                     showlegend=True))
 
-    fig.update_layout(title=title, xaxis_title="x", yaxis_title="y", yaxis_scaleanchor="x", yaxis_scaleratio=1, plot_bgcolor="white")
+    fig.update_layout(title=title, yaxis_scaleanchor="x", yaxis_scaleratio=1, plot_bgcolor="white")
     fig.write_html(output_html, include_plotlyjs="cdn", full_html=True, auto_open=False)
     return True

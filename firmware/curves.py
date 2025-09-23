@@ -39,6 +39,24 @@ if __name__=="__main__":
         default_csv = os.path.join(os.path.dirname(__file__), "data", "sample_track.csv")
         points_file = default_csv if os.path.isfile(default_csv) else None
 
+    # Outline rendering (does not require points_file)
+    if args.outline_csv and args.outline_web:
+        try:
+            from .io import load_centerline_with_widths
+            cws = load_centerline_with_widths(args.outline_csv)
+            raceline_pts = None
+            if args.raceline:
+                try:
+                    from .io import load_points as _load_points
+                    raceline_pts = _load_points(args.raceline)
+                except Exception as e:
+                    print(f"Failed to load raceline '{args.raceline}': {e}")
+            ok = plotly_track_outline_from_widths_html(cws, args.outline_web, title=f"Track Outline ({os.path.basename(args.outline_csv)})", raceline_points=raceline_pts)
+            if ok:
+                print(f"Wrote outline HTML to {args.outline_web}")
+        except Exception as e:
+            print(f"Failed outline render: {e}")
+
     if (args.mad or args.heatmap or args.heatmap3d or args.web or args.web3d) and points_file:
         pts = load_points(points_file)
         curvs = curvature_vectorized(pts)
@@ -51,7 +69,7 @@ if __name__=="__main__":
                 for i, s in enumerate(segments, 1):
                     if s["type"] == "turn":
                         print(f"  {i}. turn  entry={s['entry_point']} apex={s['apex_point']} exit={s['exit_point']}")
-        else:
+                    else:
                         print(f"  {i}. straight  start={s['start_point']} end={s['end_point']}")
         if args.heatmap:
             res = plot_curvature_heatmap(pts, curvs, title=f"Curvature Heatmap ({os.path.basename(points_file)})")
@@ -74,25 +92,15 @@ if __name__=="__main__":
             ok = plotly_curvature_heatmap_html(pts, curvs, args.web, title=f"Curvature Heatmap ({os.path.basename(points_file)})", raceline_points=raceline_pts)
             if ok:
                 print(f"Wrote HTML to {args.web}")
-        if args.outline_csv and args.outline_web:
-            try:
-                from .io import load_centerline_with_widths
-                cws = load_centerline_with_widths(args.outline_csv)
-                ok = plotly_track_outline_from_widths_html(cws, args.outline_web, title=f"Track Outline ({os.path.basename(args.outline_csv)})")
-                print("Hello")
-                if ok:
-                    print(f"Wrote outline HTML to {args.outline_web}")
-            except Exception as e:
-                print(f"Failed outline render: {e}")
         if args.web3d:
             ok3 = plotly_curvature_heatmap_3d_html(pts, curvs, args.web3d, title=f"Curvature Heatmap 3D ({os.path.basename(points_file)})")
             if ok3:
                 print(f"Wrote HTML to {args.web3d}")
-            else:
-    visualize_curvature_concept()
+    else:
+        # Default demo flow
+        visualize_curvature_concept()
         # test_segmentation_debug(points_file)
         # compare_performance()
         # track_points = [(i, 3*math.sin(i/10)) for i in range(50)]
         # segments = segment_track_multi_scale(track_points, window_sizes=[3,5,9], threshold_factors=[0.5,0.5,0.5])
         # ascii_track_visualization_scaled(segments, width=60, height=15)
-    ascii_track_visualization_scaled(segments, width=60, height=15)
