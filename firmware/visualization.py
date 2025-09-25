@@ -345,8 +345,8 @@ def plotly_track_outline_from_widths_html(centerline_with_widths, output_html, t
         if len(rp) >= 2:
             rp_sm = _chaikin_open(rp, iterations=smooth_iterations)
             rx, ry = rp_sm[:,0], rp_sm[:,1]
-            fig.add_trace(go.Scatter(x=rx, y=ry, name="Racing line", mode="markers",
-                                     marker=dict(color="white", size=1, line=dict(color="blue", width=1)),
+            fig.add_trace(go.Scatter(x=rx, y=ry, name="Racing line", mode="lines+markers",
+                                     marker=dict(color="blue", size=1, line=dict(color="dark blue", width=1)),
                                      showlegend=True))
 
     fig.update_layout(title=title, yaxis_scaleanchor="x", yaxis_scaleratio=1, plot_bgcolor="white")

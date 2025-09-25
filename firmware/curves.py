@@ -54,6 +54,20 @@ if __name__=="__main__":
             ok = plotly_track_outline_from_widths_html(cws, args.outline_web, title=f"Track Outline ({os.path.basename(args.outline_csv)})", raceline_points=raceline_pts)
             if ok:
                 print(f"Wrote outline HTML to {args.outline_web}")
+            
+            if args.mad:
+                curvs = curvature_vectorized(raceline_pts)
+                segments = segment_by_median_mad(curvs, factor=args.factor, points=raceline_pts)
+                if args.print_json:
+                    print(json.dumps(segments, ensure_ascii=False, indent=2))
+                else:
+                    print(f"MAD segmentation on {len(raceline_pts)} points (factor={args.factor}): {len(segments)} segments")
+                    for i, s in enumerate(segments, 1):
+                        if s["type"] == "turn":
+                            print(f"  {i}. turn  entry={s['entry_point']} apex={s['apex_point']} exit={s['exit_point']}")
+                        else:
+                            print(f"  {i}. straight  start={s['start_point']} end={s['end_point']}")
+
         except Exception as e:
             print(f"Failed outline render: {e}")
 
@@ -98,9 +112,10 @@ if __name__=="__main__":
                 print(f"Wrote HTML to {args.web3d}")
     else:
         # Default demo flow
-        visualize_curvature_concept()
+        # visualize_curvature_concept()
         # test_segmentation_debug(points_file)
-        # compare_performance()
+        # # compare_performance()
         # track_points = [(i, 3*math.sin(i/10)) for i in range(50)]
         # segments = segment_track_multi_scale(track_points, window_sizes=[3,5,9], threshold_factors=[0.5,0.5,0.5])
         # ascii_track_visualization_scaled(segments, width=60, height=15)
+        print("Hello")

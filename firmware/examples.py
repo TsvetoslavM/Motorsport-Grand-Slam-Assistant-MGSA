@@ -151,7 +151,8 @@ def compare_performance():
     vec_time = time.time() - start_time
     print(f"Vectorized implementation: {vec_time:.4f} seconds")
 
-    print(f"Speedup: {orig_time/vec_time:.2f}x")
+    speedup = orig_time/vec_time
+    print(f"Speedup: {speedup:.2f}x")
 
     # Verify results are similar
     max_diff = np.max(np.abs(np.array(curvatures_orig) - curvatures_vec[1:-1]))

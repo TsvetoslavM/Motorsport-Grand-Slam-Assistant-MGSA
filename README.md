@@ -1,5 +1,226 @@
 # Motorsport Grand Slam Assistant (MGSA)
 Embedded device that records the car's behavior during laps on a race track and analyzes the most optimal trajectory. It shows the pilot a real-time visual indication (via a HUD display) of the ideal line of travel relative to the car's current position. The system has a web-based interface where you can monitor important parameters.
 
-Comand to start:
-python -m firmware.curves --outline-csv firmware\data\simple_track.csv --outline-web outline.html --raceline firmware\data\raceline.csv
+Got it 👍 Thanks for catching that — I’ll update everything to use **`simple_track.csv`** instead of `sample_track.csv`.
+Here’s the **final full README with Quick Start included**:
+
+---
+
+# Motorsport Curvature & Segmentation Toolkit
+
+This module provides **curvature calculation, segmentation, and visualization tools** for motorsport track analysis.
+It supports **MATLAB-style heatmaps, interactive Plotly visualizations, track segmentation with Median + MAD**, and **track outline rendering**.
+
+---
+
+## 📦 Installation
+
+Clone your repository and install dependencies:
+
+```bash
+git clone https://github.com/your-repo/firmware.git
+cd firmware
+```
+
+Create a virtual environment (recommended):
+
+```bash
+python -m venv venv
+source venv/bin/activate   # On Linux/macOS
+venv\Scripts\activate      # On Windows
+```
+
+Install required Python packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+If you don’t have a `requirements.txt`, install manually:
+
+```bash
+pip install numpy matplotlib plotly
+```
+
+---
+
+## ⚡ Usage
+
+Run the script directly with:
+
+```bash
+python -m firmware.curves [OPTIONS]
+```
+
+### 🔹 Input Data
+
+* `--points <path>` : CSV or JSON file with track points (`x,y` format).
+* Alternatively, set via environment variable:
+
+  ```bash
+  export TRACK_POINTS_FILE=data/simple_track.csv
+  ```
+
+---
+
+## 🎯 Commands
+
+### 1. Segmentation (Median + MAD)
+
+Run segmentation on points:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --mad
+```
+
+Change sensitivity with factor (default = `3.0`):
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --mad --factor 2.5
+```
+
+Output results as JSON:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --mad --print-json
+```
+
+---
+
+### 2. Heatmaps (Matplotlib)
+
+2D curvature heatmap:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --heatmap
+```
+
+3D curvature heatmap:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --heatmap3d
+```
+
+---
+
+### 3. Interactive Web Visualizations (Plotly)
+
+Export interactive 2D HTML heatmap:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --web templates/heatmap.html
+```
+
+Overlay a racing line:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --web templates/heatmap.html --raceline data/raceline.csv
+```
+
+Export interactive 3D HTML heatmap:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --web3d templates/heatmap3d.html
+```
+
+---
+
+### 4. Track Outline Rendering
+
+Render track outline with widths (`x,y,left,right`):
+
+```bash
+python -m firmware.curves --outline-csv data/simple_track.csv --outline-web templates/outline.html
+```
+
+With racing line overlay:
+
+```bash
+python -m firmware.curves --outline-csv data/simple_track.csv --outline-web templates/outline.html --raceline data/raceline.csv
+```
+
+---
+
+### 5. Default Demo
+
+If no arguments are given, the script runs a **demo visualization**:
+
+```bash
+python -m firmware.curves
+```
+
+---
+
+## 📂 Example Data Format
+
+### Track Points (CSV)
+
+```csv
+x,y
+0,0
+1,2
+2,3
+3,5
+```
+
+### Track Outline (CSV with widths)
+
+```csv
+x,y,left,right
+0,0,3,3
+1,2,2.5,2.5
+2,3,2,2
+3,5,3,3
+```
+
+---
+
+## ✅ Requirements
+
+* Python 3.8+
+* Libraries:
+
+  * `numpy`
+  * `matplotlib` (for heatmaps)
+  * `plotly` (for interactive HTML exports)
+
+Install all dependencies with:
+
+```bash
+pip install numpy matplotlib plotly
+```
+
+---
+
+## 🚀 Quick Start
+
+1. Run segmentation on the included track:
+
+   ```bash
+   python -m firmware.curves --points data/simple_track.csv --mad
+   ```
+
+2. View curvature heatmap:
+
+   ```bash
+   python -m firmware.curves --points data/simple_track.csv --heatmap
+   ```
+
+3. Export interactive web heatmap:
+
+   ```bash
+   python -m firmware.curves --points data/simple_track.csv --web out_heatmap.html
+   ```
+
+4. Try the default demo:
+
+   ```bash
+   python -m firmware.curves
+   ```
+
+4. Try full raceline with traight and turns:
+
+   ```bash
+   python -m firmware.curves --outline-csv data/simple_track.csv --outline-web templates/outline.html --raceline data/raceline.csv --mad --factor 3
+   ```
+---
