@@ -110,12 +110,11 @@ if __name__=="__main__":
             ok3 = plotly_curvature_heatmap_3d_html(pts, curvs, args.web3d, title=f"Curvature Heatmap 3D ({os.path.basename(points_file)})")
             if ok3:
                 print(f"Wrote HTML to {args.web3d}")
-    else:
-        # Default demo flow
-        # visualize_curvature_concept()
-        # test_segmentation_debug(points_file)
-        # # compare_performance()
-        # track_points = [(i, 3*math.sin(i/10)) for i in range(50)]
-        # segments = segment_track_multi_scale(track_points, window_sizes=[3,5,9], threshold_factors=[0.5,0.5,0.5])
-        # ascii_track_visualization_scaled(segments, width=60, height=15)
-        print("Hello")
+    if not (args.mad or args.heatmap or args.heatmap3d or args.web or args.web3d or args.outline_csv and args.outline_web):
+        # # Default demo flow
+        visualize_curvature_concept()
+        test_segmentation_debug(points_file)
+        # compare_performance()
+        track_points = [(i, 3*math.sin(i/10)) for i in range(50)]
+        segments = segment_track_multi_scale(track_points, window_sizes=[3,5,9], threshold_factors=[0.5,0.5,0.5])
+        ascii_track_visualization_scaled(segments, width=60, height=15)
