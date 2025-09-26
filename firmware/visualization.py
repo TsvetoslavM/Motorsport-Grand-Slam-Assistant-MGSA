@@ -275,10 +275,31 @@ def plotly_curvature_heatmap_3d_html(points, curvatures, output_html, title="Cur
     return True
 
 
-def plotly_track_outline_from_widths_html(centerline_with_widths, output_html, title="Track Outline (web)", smooth_iterations: int = 2, raceline_points=None):
+def plotly_track_outline_from_widths_html(centerline_with_widths,
+                                          output_html,
+                                          title="Track Outline (web)",
+                                          smooth_iterations: int = 2,
+                                          raceline_points=None,
+                                          curvatures=None,
+                                          mad_factor: float = 3.0,
+                                          color_edges_by_turns: bool = True):
     """Draw left/right edges from centerline and per-point left/right widths.
 
-    centerline_with_widths: list of (x, y, left_width, right_width)
+    - If color_edges_by_turns is True, colors the left/right edges similar to
+      plot_turns_and_straights: straights black, turns blue. Segmentation is
+      computed from centerline curvature (provided via `curvatures` or
+      computed internally).
+
+    Parameters:
+        centerline_with_widths: list of (x, y, left_width, right_width)
+        output_html: destination HTML path
+        title: chart title
+        smooth_iterations: smoothing iterations for the faint background outline
+        raceline_points: optional (x,y) sequence to overlay
+        curvatures: optional array aligned to centerline points; if None will
+                    be computed
+        mad_factor: MAD segmentation factor
+        color_edges_by_turns: whether to add colored left/right edges
     """
     try:
         import plotly.graph_objects as go
@@ -311,8 +332,8 @@ def plotly_track_outline_from_widths_html(centerline_with_widths, output_html, t
     norms[norms == 0] = 1.0
     n = n / norms[:,None]
 
-    left_edge = pts + n * lw[:,None]
-    right_edge = pts - n * rw[:,None]
+    left_edge_raw = pts + n * lw[:,None]
+    right_edge_raw = pts - n * rw[:,None]
 
     # Optional smoothing (Chaikin) for nicer outlines
     def _chaikin_open(poly: np.ndarray, iterations: int = 2) -> np.ndarray:
@@ -330,16 +351,61 @@ def plotly_track_outline_from_widths_html(centerline_with_widths, output_html, t
             out = np.asarray(new_pts)
         return out
 
+    # Smoothed copies for background polygon only (to keep indices consistent for coloring)
+    left_edge_bg = left_edge_raw
+    right_edge_bg = right_edge_raw
     if smooth_iterations > 0:
-        left_edge = _chaikin_open(left_edge, iterations=smooth_iterations)
-        right_edge = _chaikin_open(right_edge, iterations=smooth_iterations)
+        left_edge_bg = _chaikin_open(left_edge_bg, iterations=smooth_iterations)
+        right_edge_bg = _chaikin_open(right_edge_bg, iterations=smooth_iterations)
 
     fig = go.Figure()
-        # Close the outline by connecting right edge back to left edge
-    poly_x = list(left_edge[:,0]) + list(right_edge[::-1,0]) + [left_edge[0,0]]
-    poly_y = list(left_edge[:,1]) + list(right_edge[::-1,1]) + [left_edge[0,1]]
-    fig.add_trace(go.Scatter(x=poly_x, y=poly_y, mode="lines", name="Outline",
-                             line=dict(color="black", width=10), hoverinfo="skip", showlegend=True, opacity=0.2))
+        # Close the outline by connecting right edge back to left edge (background polygon)
+    poly_x = list(left_edge_bg[:,0]) + list(right_edge_bg[::-1,0]) + [left_edge_bg[0,0]]
+    poly_y = list(left_edge_bg[:,1]) + list(right_edge_bg[::-1,1]) + [left_edge_bg[0,1]]
+
+    # Optionally add colored edges (unsmoothed, to align with segmentation indices)
+    if color_edges_by_turns:
+        try:
+            from .segmentation import segment_by_median_mad
+            if curvatures is None:
+                from .curvature import curvature_vectorized
+                curvatures = curvature_vectorized(pts)
+            # Harmonize curvature length to points length if needed
+            curvs = np.asarray(curvatures, dtype=float)
+            if curvs.size != len(pts):
+                if curvs.size == max(len(pts) - 2, 0):
+                    curvs = np.pad(curvs, (1, 1), mode="edge")
+                else:
+                    curvs = np.interp(np.arange(len(pts)),
+                                      np.linspace(0, len(pts) - 1, max(len(curvs), 2)),
+                                      curvs if curvs.size > 0 else np.zeros(2))
+            segments = segment_by_median_mad(curvs, factor=mad_factor, points=pts)
+
+            def _add_edge_chunk(edge_pts: np.ndarray, color: str, name: str):
+                if edge_pts.shape[0] < 2:
+                    return
+                fig.add_trace(
+                    go.Scatter(
+                        x=edge_pts[:, 0],
+                        y=edge_pts[:, 1],
+                        mode="lines",
+                        line=dict(color=color, width=6),
+                        name=name,
+                        hoverinfo="skip",
+                        showlegend=True,
+                    )
+                )
+
+            for seg in segments:
+                start = max(0, int(seg["start_idx"]))
+                end = min(len(pts) - 1, int(seg["end_idx"]))
+                if end <= start:
+                    continue
+                color = "blue" if seg["type"] == "turn" else "black"
+                _add_edge_chunk(left_edge_raw[start:end + 1], color=color, name="Turn" if seg["type"] == "turn" else "Straight")
+                _add_edge_chunk(right_edge_raw[start:end + 1], color=color, name="Turn" if seg["type"] == "turn" else "Straight")
+        except Exception as e:
+            print(f"Failed to color edges by turns: {e}")
     if raceline_points is not None:
         rp = np.asarray(raceline_points, dtype=float)
         if len(rp) >= 2:
