@@ -1,0 +1,155 @@
+/* Design tokens */
+:root {
+  --page-bg-top: #f7f9fc;
+  --page-bg-bottom: #eef3f9;
+  --card-bg: #ffffff;
+  --text: #0f172a;
+  --muted: #334155;
+  --grid: rgba(2, 6, 23, 0.06);
+  --accent: #0ea5e9;   /* cyan-500 */
+  --accent-strong: #0284c7; /* cyan-600 */
+  --accent-hover: #22d3ee; /* cyan-400 */
+  --elev-1: 0 10px 25px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.06);
+  --elev-2: 0 14px 35px rgba(15, 23, 42, 0.12), 0 6px 14px rgba(15, 23, 42, 0.08);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+  --transition: 180ms cubic-bezier(.2,.8,.2,1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page-bg-top: #0b1220;
+    --page-bg-bottom: #111827;
+    --card-bg: #111827;
+    --text: #f8fafc;
+    --muted: #cbd5e1;
+    --grid: rgba(148, 163, 184, 0.18);
+    --elev-1: 0 10px 25px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --elev-2: 0 18px 40px rgba(0,0,0,.55), 0 10px 18px rgba(0,0,0,.4);
+  }
+}
+
+/* Global page styling */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(180deg, var(--page-bg-top) 0%, var(--page-bg-bottom) 100%);
+  color: var(--text);
+  font-family: Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Center the plot and add a subtle card effect */
+.js-plotly-plot, .plot-container {
+  max-width: 1200px;
+  margin: 24px auto;
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  box-shadow: var(--elev-1);
+  transition: box-shadow var(--transition), transform var(--transition);
+}
+.js-plotly-plot:hover, .plot-container:hover {
+  box-shadow: var(--elev-2);
+  transform: translateY(-1px);
+}
+
+/* Plot background color harmonize */
+.js-plotly-plot .plotly .bg {
+  fill: var(--card-bg) !important;
+}
+
+/* Axes and gridlines light styling */
+.js-plotly-plot .plotly .xgrid, .js-plotly-plot .plotly .ygrid {
+  stroke: var(--grid) !important;
+}
+.js-plotly-plot .plotly .xtick text, .js-plotly-plot .plotly .ytick text {
+  fill: var(--muted) !important;
+  font-size: 12px;
+}
+
+/* Title styling */
+.js-plotly-plot .plotly .gtitle {
+  font-weight: 800;
+  font-size: 22px !important;
+  letter-spacing: 0.2px;
+  fill: var(--text) !important;
+}
+.js-plotly-plot .plotly .gtitle:hover {
+  filter: brightness(1.05);
+}
+
+/* Legend styling */
+.js-plotly-plot .plotly .legend {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(2, 6, 23, 0.08);
+  border-radius: var(--radius-md);
+  backdrop-filter: saturate(130%) blur(6px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  max-height: 60vh;
+  overflow: auto;
+}
+.js-plotly-plot .plotly .legend text {
+  fill: var(--text) !important;
+  font-size: 13px !important;
+}
+.js-plotly-plot .plotly .legend .traces:hover text {
+  filter: brightness(1.1);
+}
+
+/* Modebar (toolbar) modern look */
+.modebar {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border: 1px solid rgba(2, 6, 23, 0.08) !important;
+  border-radius: var(--radius-md) !important;
+  backdrop-filter: saturate(130%) blur(6px);
+}
+.modebar-btn svg {
+  fill: var(--muted) !important;
+  transition: fill var(--transition), transform var(--transition);
+}
+.modebar-btn:hover svg {
+  fill: var(--text) !important;
+  transform: translateY(-1px);
+}
+
+/* Updatemenus (buttons) styling */
+.js-plotly-plot .plotly .updatemenu-group .updatemenu-button rect {
+  fill: var(--accent);
+  stroke: var(--accent-strong);
+  stroke-width: 1.2px;
+  rx: 9999px; /* pill */
+}
+.js-plotly-plot .plotly .updatemenu-group .updatemenu-button:hover rect {
+  fill: var(--accent-hover);
+}
+.js-plotly-plot .plotly .updatemenu-group .updatemenu-button text {
+  fill: #ffffff !important;
+  font-weight: 700;
+  letter-spacing: .2px;
+}
+
+/* Turn number markers: improve text legibility (text drawn in SVG) */
+.js-plotly-plot .plotly text {
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 3px;
+}
+
+/* Fancy badge look for turn numbers (markers) */
+.js-plotly-plot .plotly .scatter .points path {
+  filter: drop-shadow(0 2px 4px rgba(15,23,42,.18));
+}
+
+/* Small screens */
+@media (max-width: 768px) {
+  .js-plotly-plot, .plot-container {
+    margin: 10px;
+    border-radius: var(--radius-md);
+  }
+  .modebar {
+    right: 6px !important;
+    top: 6px !important;
+  }
+}
+
+

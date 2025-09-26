@@ -275,14 +275,45 @@ def plotly_curvature_heatmap_3d_html(points, curvatures, output_html, title="Cur
     return True
 
 
+def _write_html_with_css(fig,
+                         output_html: str,
+                         css_text: str | None = None,
+                         css_file: str | None = None) -> bool:
+    try:
+        html = fig.to_html(include_plotlyjs="cdn", full_html=True)
+        css = css_text
+        if css is None and css_file is not None:
+            try:
+                with open(css_file, "r", encoding="utf-8") as f:
+                    css = f.read()
+            except Exception as e:
+                print(f"Failed to read CSS file '{css_file}': {e}")
+        if css:
+            inject = f"\n<style>\n{css}\n</style>\n"
+            head_end = html.find("</head>")
+            if head_end != -1:
+                html = html[:head_end] + inject + html[head_end:]
+            else:
+                # Fallback: prepend
+                html = inject + html
+        with open(output_html, "w", encoding="utf-8") as f:
+            f.write(html)
+        return True
+    except Exception as e:
+        print(f"Failed to write HTML with CSS: {e}")
+        return False
+
+
 def plotly_track_outline_from_widths_html(centerline_with_widths,
                                           output_html,
-                                          title="Track Outline (web)",
+                                          title="SPA",
                                           smooth_iterations: int = 2,
                                           raceline_points=None,
                                           curvatures=None,
-                                          mad_factor: float = 3.0,
-                                          color_edges_by_turns: bool = True):
+                                          mad_factor: float = 4.0,
+                                          color_edges_by_turns: bool = True,
+                                          css_text: str | None = None,
+                                          css_file: str | None = None):
     """Draw left/right edges from centerline and per-point left/right widths.
 
     - If color_edges_by_turns is True, colors the left/right edges similar to
@@ -291,7 +322,7 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
       computed internally).
 
     Parameters:
-        centerline_with_widths: list of (x, y, left_width, right_width)
+    centerline_with_widths: list of (x, y, left_width, right_width)
         output_html: destination HTML path
         title: chart title
         smooth_iterations: smoothing iterations for the faint background outline
@@ -381,9 +412,14 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                                       curvs if curvs.size > 0 else np.zeros(2))
             segments = segment_by_median_mad(curvs, factor=mad_factor, points=pts)
 
-            def _add_edge_chunk(edge_pts: np.ndarray, color: str, name: str):
+            edge_trace_indices: list[int] = []
+            turn_edge_trace_indices: list[int] = []
+            straight_edge_trace_indices: list[int] = []
+
+            def _add_edge_chunk(edge_pts: np.ndarray, color: str, name: str, show_in_legend: bool) -> int:
                 if edge_pts.shape[0] < 2:
-                    return
+                    return -1
+                before = len(fig.data)
                 fig.add_trace(
                     go.Scatter(
                         x=edge_pts[:, 0],
@@ -392,29 +428,148 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                         line=dict(color=color, width=6),
                         name=name,
                         hoverinfo="skip",
-                        showlegend=True,
+                        showlegend=show_in_legend,
                     )
                 )
+                idx = before
+                edge_trace_indices.append(idx)
+                return idx
 
+            turn_index = 0
+            # For sizing annotations, estimate a reasonable default radius
+            x_min, x_max = float(np.min(pts[:, 0])), float(np.max(pts[:, 0]))
+            y_min, y_max = float(np.min(pts[:, 1])), float(np.max(pts[:, 1]))
+            scale_ref = max(x_max - x_min, y_max - y_min, 1.0)
+
+            # Collect positions/sizes for label markers (to avoid overlaps)
+            label_x: list[float] = []
+            label_y: list[float] = []
+            label_text: list[str] = []
+            label_sizes: list[float] = []
             for seg in segments:
                 start = max(0, int(seg["start_idx"]))
                 end = min(len(pts) - 1, int(seg["end_idx"]))
                 if end <= start:
                     continue
-                color = "blue" if seg["type"] == "turn" else "black"
-                _add_edge_chunk(left_edge_raw[start:end + 1], color=color, name="Turn" if seg["type"] == "turn" else "Straight")
-                _add_edge_chunk(right_edge_raw[start:end + 1], color=color, name="Turn" if seg["type"] == "turn" else "Straight")
+                if seg["type"] == "turn":
+                    turn_index += 1
+                    turn_name = f"Turn {turn_index}"
+                    # Show legend only once per turn (left edge)
+                    idx_left = _add_edge_chunk(left_edge_raw[start:end + 1], color="blue", name=turn_name, show_in_legend=True)
+                    _ = _add_edge_chunk(right_edge_raw[start:end + 1], color="blue", name=turn_name, show_in_legend=False)
+                    if idx_left >= 0:
+                        turn_edge_trace_indices.append(idx_left)
+                    # Add numeric label marker (circle+text) offset off the track
+                    mid = (start + end) // 2
+                    # Choose offset direction by available width
+                    left_w = float(lw[mid]) if mid < len(lw) else 0.0
+                    right_w = float(rw[mid]) if mid < len(rw) else 0.0
+                    # Always place on the left side of travel (normal direction)
+                    side = 15.0
+                    offset_dist = max(left_w, 1e-6) * 1.5
+                    ax = float(pts[mid, 0] + n[mid, 0] * side * offset_dist)
+                    ay = float(pts[mid, 1] + n[mid, 1] * side * offset_dist)
+                    # Circle radius, relative to track size but not too big
+                    r = max(0.012 * scale_ref, 0.2 * max(left_w, right_w, 1e-6))
+                    # Prevent overlaps by pushing further along the left normal until no intersection
+                    def _overlaps_any(px: float, py: float, pr: float) -> bool:
+                        for (qx, qy, qr) in zip(label_x, label_y, label_sizes):
+                            dx = px - qx
+                            dy = py - qy
+                            if (dx*dx + dy*dy) < (pr + qr) * (pr + qr):
+                                return True
+                        return False
+                    while _overlaps_any(ax, ay, r):
+                        offset_dist += r * 0.6
+                        ax = float(pts[mid, 0] + n[mid, 0] * side * offset_dist)
+                        ay = float(pts[mid, 1] + n[mid, 1] * side * offset_dist)
+                    label_x.append(ax)
+                    label_y.append(ay)
+                    label_text.append(str(turn_index))
+                    # Plotly marker size is in px; map world radius to a reasonable px size
+                    # Use a fixed size for consistency but keep list for future tuning
+                    label_sizes.append(r)
+                else:
+                    # Straights: draw but do not show in legend
+                    idx_s_left = _add_edge_chunk(left_edge_raw[start:end + 1], color="black", name="Straight", show_in_legend=False)
+                    _ = _add_edge_chunk(right_edge_raw[start:end + 1], color="black", name="Straight", show_in_legend=False)
+                    if idx_s_left >= 0:
+                        straight_edge_trace_indices.append(idx_s_left)
         except Exception as e:
             print(f"Failed to color edges by turns: {e}")
+    
+    # Add a labeled markers trace for turn numbers so it can be toggled from legend
+    labels_trace_index = None
+    if color_edges_by_turns:
+        try:
+            if len(label_x) > 0:
+                # Use a single scatter for labels with text inside circular-looking markers
+                # Marker size in px; choose a readable fixed size
+                marker_size = 18
+                before = len(fig.data)
+                fig.add_trace(go.Scatter(
+                    x=label_x,
+                    y=label_y,
+                    mode="markers+text",
+                    name="Turn numbers",
+                    text=label_text,
+                    textposition="middle center",
+                    textfont=dict(color="blue", size=12),
+                    marker=dict(size=marker_size, color="white", line=dict(color="blue", width=2)),
+                    hoverinfo="skip",
+                    showlegend=True,
+                ))
+                labels_trace_index = before
+        except Exception as e:
+            print(f"Failed to add turn number labels: {e}")
+    raceline_trace_index = None
     if raceline_points is not None:
         rp = np.asarray(raceline_points, dtype=float)
         if len(rp) >= 2:
             rp_sm = _chaikin_open(rp, iterations=smooth_iterations)
             rx, ry = rp_sm[:,0], rp_sm[:,1]
+            before = len(fig.data)
             fig.add_trace(go.Scatter(x=rx, y=ry, name="Racing line", mode="lines+markers",
                                      marker=dict(color="blue", size=1, line=dict(color="dark blue", width=1)),
                                      showlegend=True))
+            raceline_trace_index = before
+
+    # Add buttons to toggle labels and show racing line only
+    try:
+        total_traces = len(fig.data)
+        # Default: all visible
+        vis_all = [True] * total_traces
+        # Hide labels only
+        vis_no_labels = vis_all.copy()
+        if labels_trace_index is not None:
+            vis_no_labels[labels_trace_index] = False
+        # Racing line only: hide everything except raceline (if present)
+        vis_race_only = [False] * total_traces
+        if raceline_trace_index is not None:
+            vis_race_only[raceline_trace_index] = True
+
+        fig.update_layout(
+            updatemenus=[dict(
+                type="buttons",
+                direction="right",
+                x=0.5,
+                y=1.12,
+                xanchor="center",
+                yanchor="bottom",
+                buttons=[
+                    dict(label="All", method="update", args=[{"visible": vis_all}]),
+                    dict(label="Hide turn numbers", method="update", args=[{"visible": vis_no_labels}]),
+                    dict(label="Racing line only", method="update", args=[{"visible": vis_race_only}]),
+                ],
+                showactive=True,
+            )]
+        )
+    except Exception as e:
+        print(f"Failed to add toggle buttons: {e}")
 
     fig.update_layout(title=title, yaxis_scaleanchor="x", yaxis_scaleratio=1, plot_bgcolor="white")
-    fig.write_html(output_html, include_plotlyjs="cdn", full_html=True, auto_open=False)
+    return _write_html_with_css(fig, output_html, css_text=css_text, css_file=css_file)
+
+
     return True
+

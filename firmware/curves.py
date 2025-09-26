@@ -82,8 +82,9 @@ def handle_outline_render(args: argparse.Namespace) -> None:
         ok = plotly_track_outline_from_widths_html(
             cws,
             args.outline_web,
-            title=f"Track Outline ({os.path.basename(args.outline_csv)})",
+            title=f"Spa, Belgium",
             raceline_points=raceline_pts,
+            css_file= "templates/outline.css",
         )
         if ok:
             print(f"Wrote outline HTML to {args.outline_web}")
