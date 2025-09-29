@@ -12,6 +12,7 @@ from .visualization import (
 from .examples import visualize_curvature_concept, test_segmentation_debug, compare_performance
 from .io import load_points
 from .track_coloring import plot_turns_and_straights
+from .vmax_raceline import VehicleParams, speed_profile, export_csv, plot_speed_vs_s
 import os
 import argparse
 import json
@@ -33,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--print-json", action="store_true", help="Print MAD segments as JSON output")
     parser.add_argument("--turns-web", type=str, default=None, help="Output HTML path for turns/straights coloring (blue turns, black straights)")
     parser.add_argument("--turns-factor", type=float, default=3.0, help="MAD factor for turns/straights segmentation")
+    parser.add_argument("--v_max", action="store_true", help="Compute vmax speed profile using data/raceline.csv only")
     return parser.parse_args()
 
 
@@ -71,12 +73,30 @@ def handle_outline_render(args: argparse.Namespace) -> None:
         return
     try:
         from .io import load_centerline_with_widths
+        from .vmax_raceline import VehicleParams, speed_profile
         cws = load_centerline_with_widths(args.outline_csv)
         raceline_pts = None
+        raceline_vmax = None
+        raceline_vopt = None
         if args.raceline:
             try:
                 from .io import load_points as _load_points
                 raceline_pts = _load_points(args.raceline)
+                # Compute v_max and optimal speed along raceline for hover
+                params = VehicleParams(
+                    mass_kg=798.0,
+                    mu_friction=2.0,
+                    gravity=9.81,
+                    rho_air=1.225,
+                    cL_downforce=4.0,
+                    frontal_area_m2=1.6,
+                    engine_power_watts=735000.0,
+                    a_brake_max=54.0,
+                    a_accel_cap=54.0,
+                )
+                s, kappa, v_lat, v = speed_profile(raceline_pts, params)
+                raceline_vmax = v_lat
+                raceline_vopt = v
             except Exception as e:
                 print(f"Failed to load raceline '{args.raceline}': {e}")
         ok = plotly_track_outline_from_widths_html(
@@ -84,6 +104,8 @@ def handle_outline_render(args: argparse.Namespace) -> None:
             args.outline_web,
             title=f"Spa, Belgium",
             raceline_points=raceline_pts,
+            raceline_vmax=raceline_vmax,
+            raceline_vopt=raceline_vopt,
             css_file= "templates/outline.css",
         )
         if ok:
@@ -172,6 +194,46 @@ def run_default_demo(points_file: str | None) -> None:
 def main() -> None:
     args = parse_args()
     points_file = resolve_points_file(args)
+
+    # If --v_max is provided, run the vmax pipeline strictly on data/raceline.csv
+    if args.v_max:
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("matplotlib is required. Install with: pip install matplotlib")
+            return
+
+        raceline_csv = os.path.join(os.path.dirname(__file__), "..", "data", "raceline.csv")
+        raceline_csv = os.path.normpath(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "raceline.csv")))
+        if not os.path.isfile(raceline_csv):
+            # Fallback to repository root data/raceline.csv
+            raceline_csv = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "raceline.csv"))
+        if not os.path.isfile(raceline_csv):
+            print("Cannot find data/raceline.csv. Please place it under the repository data/ folder.")
+            return
+
+        pts = load_points(raceline_csv)
+        params = VehicleParams(
+            mass_kg=798.0,
+            mu_friction=2.0,
+            gravity=9.81,
+            rho_air=1.225,
+            cL_downforce=4.0,
+            frontal_area_m2=1.6,
+            engine_power_watts=735000.0,
+            a_brake_max=54.0,
+            a_accel_cap=54.0,
+        )
+        s, kappa, v_lat, v = speed_profile(pts, params)
+        out_csv = os.path.join(os.path.dirname(raceline_csv), "raceline_vmax.csv")
+        export_csv(out_csv, pts, s, kappa, v)
+        print(f"Wrote vmax CSV: {out_csv}")
+        from .vmax_raceline import compute_lap_time_seconds
+        lap_time = compute_lap_time_seconds(s, v)
+        print(f"Estimated lap time: {lap_time:.3f} s")
+        plot_speed_vs_s(s, v, title=f"Vmax profile (lap: {lap_time:.2f}s)")
+        plt.show()
+        return
 
     # Outline rendering can be independent of points file
     handle_outline_render(args)

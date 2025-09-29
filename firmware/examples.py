@@ -4,6 +4,7 @@ import numpy as np
 from .curvature import curvature, curvature_vectorized
 from .segmentation import segment_track_multi_scale
 from .io import load_points
+from .vmax_raceline import VehicleParams, speed_profile
 
 
 def visualize_curvature_concept():
@@ -158,4 +159,37 @@ def compare_performance():
     max_diff = np.max(np.abs(np.array(curvatures_orig) - curvatures_vec[1:-1]))
     print(f"Maximum difference between implementations: {max_diff:.6f}")
 
+
+
+def demo_vmax_on_csv(csv_path: str):
+    """Run vmax model on a CSV of x,y and show a speed plot.
+
+    Uses the example vehicle parameters provided in the request.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib is required. Install with: pip install matplotlib")
+        return
+
+    points = load_points(csv_path)
+    params = VehicleParams(
+        mass_kg=798.0,
+        mu_friction=2.0,
+        gravity=9.81,
+        rho_air=1.225,
+        cL_downforce=4.0,
+        frontal_area_m2=1.6,
+        engine_power_watts=735000.0,
+        a_brake_max=54.0,
+        a_accel_cap=54.0,
+    )
+    s, kappa, v_lat, v = speed_profile(points, params)
+
+    from .vmax_raceline import export_csv, plot_speed_vs_s, compute_lap_time_seconds
+    export_csv(csv_path.replace('.csv', '_vmax.csv'), points, s, kappa, v)
+    plot_speed_vs_s(s, v, title=f"Speed profile: {csv_path}")
+    lap_time = compute_lap_time_seconds(s, v)
+    print(f"Estimated lap time: {lap_time:.3f} s")
+    plt.show()
 

@@ -313,7 +313,9 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                                           mad_factor: float = 4.0,
                                           color_edges_by_turns: bool = True,
                                           css_text: str | None = None,
-                                          css_file: str | None = None):
+                                          css_file: str | None = None,
+                                          raceline_vmax=None,
+                                          raceline_vopt=None):
     """Draw left/right edges from centerline and per-point left/right widths.
 
     - If color_edges_by_turns is True, colors the left/right edges similar to
@@ -526,12 +528,39 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
     if raceline_points is not None:
         rp = np.asarray(raceline_points, dtype=float)
         if len(rp) >= 2:
-            rp_sm = _chaikin_open(rp, iterations=smooth_iterations)
-            rx, ry = rp_sm[:,0], rp_sm[:,1]
+            # Use original raceline points for hover consistency
+            rx, ry = rp[:,0], rp[:,1]
+            # Build text per-point including v_max and optimal speed if provided
+            text = []
+            vmax_arr = np.asarray(raceline_vmax, dtype=float).reshape(-1) if raceline_vmax is not None else None
+            vopt_arr = np.asarray(raceline_vopt, dtype=float).reshape(-1) if raceline_vopt is not None else None
+            have_vmax = vmax_arr is not None and vmax_arr.size == rp.shape[0]
+            have_vopt = vopt_arr is not None and vopt_arr.size == rp.shape[0]
+            for i in range(rp.shape[0]):
+                parts = [f"x: {rx[i]:.3f}", f"y: {ry[i]:.3f}"]
+                if have_vmax:
+                    vdisp = vmax_arr[i]
+                    if np.isfinite(vdisp):
+                        parts.append(f"v_max: {float(vdisp):.2f} m/s")
+                    else:
+                        parts.append("v_max: -")
+                if have_vopt:
+                    kmh = float(vopt_arr[i]) * 3.6
+                    parts.append(f"optimal: {kmh:.1f} km/h")
+                text.append("<br>".join(parts))
+
             before = len(fig.data)
-            fig.add_trace(go.Scatter(x=rx, y=ry, name="Racing line", mode="lines+markers",
-                                     marker=dict(color="blue", size=1, line=dict(color="dark blue", width=1)),
-                                     showlegend=True))
+            fig.add_trace(go.Scatter(
+                x=rx,
+                y=ry,
+                name="Racing line",
+                mode="lines+markers",
+                line=dict(color="blue", width=3),
+                marker=dict(color="blue", size=3),
+                showlegend=True,
+                text=text,
+                hovertemplate="%{text}<extra></extra>",
+            ))
             raceline_trace_index = before
 
     # Add buttons to toggle labels and show racing line only
