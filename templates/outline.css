@@ -128,12 +128,12 @@ html, body {
   letter-spacing: .2px;
 }
 
-/* Turn number markers: improve text legibility (text drawn in SVG) */
+/* Turn number markers: improve text legibility (text drawn in SVG)
 .js-plotly-plot .plotly text {
   paint-order: stroke;
   stroke: rgba(255, 255, 255, 0.85);
   stroke-width: 3px;
-}
+} */
 
 /* Fancy badge look for turn numbers (markers) */
 .js-plotly-plot .plotly .scatter .points path {
