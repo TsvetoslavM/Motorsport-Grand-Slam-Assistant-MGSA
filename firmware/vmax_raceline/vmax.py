@@ -24,7 +24,7 @@ class VehicleParams:
     cD_drag: float = 1.0       # aerodynamic drag coefficient
     c_rr: float = 0.004        # rolling resistance coefficient (F1-like)
     safety_speed_margin: float = 1.00  # multiplier for global power cap (≤ 1.0)
-    brake_power_watts: float | None = None  # optional power dissipation limit for braking
+    brake_power_watts: float = 1200000.0  # optional power dissipation limit for braking
 
     def k_aero(self) -> float:
         # k_aero = (0.5 * rho * C_L * A) / m
