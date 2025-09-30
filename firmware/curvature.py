@@ -35,6 +35,10 @@ def curvature_vectorized(points):
     A = np.sqrt(area_squared)
     curvatures = np.zeros(len(points))
     curvatures[1:-1] = (4*A)/(a*b*c)
+    # Propagate interior curvature to endpoints to avoid artificial zeros
+    if len(points) >= 3:
+        curvatures[0] = curvatures[1]
+        curvatures[-1] = curvatures[-2]
     curvatures[np.isnan(curvatures)] = 0
     curvatures[np.isinf(curvatures)] = 0
     return curvatures
