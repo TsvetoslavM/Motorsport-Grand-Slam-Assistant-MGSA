@@ -19,10 +19,10 @@ class VehicleParams:
     cL_downforce: float = 4.0
     frontal_area_m2: float = 1.6
     engine_power_watts: float = 735000.0
-    a_brake_max: float = 49.0  # m/s^2, hard cap for braking decel (system limit)
-    a_accel_cap: float = 18.0  # m/s^2, optional hard cap for longitudinal accel
+    a_brake_max: float = 54.0  # m/s^2, hard cap for braking decel (system limit)
+    a_accel_cap: float = 20.0  # m/s^2, optional hard cap for longitudinal accel
     cD_drag: float = 1.0       # aerodynamic drag coefficient
-    c_rr: float = 0.01        # rolling resistance coefficient (F1-like)
+    c_rr: float = 0.004        # rolling resistance coefficient (F1-like)
     safety_speed_margin: float = 1.00  # multiplier for global power cap (≤ 1.0)
     brake_power_watts: float | None = None  # optional power dissipation limit for braking
 
@@ -51,23 +51,44 @@ def compute_curvature(points: Sequence[Point]) -> np.ndarray:
     return curvature_vectorized(points)
 
 
-def vmax_lateral(curvature: np.ndarray, params: VehicleParams, v_global_cap: float | None = None) -> np.ndarray:
-    """Lateral-friction-limited speed using v^2*|kappa| <= mu*(g + k_aero*v^2).
+def vmax_lateral(curvature: np.ndarray,
+                 params: VehicleParams,
+                 v_global_cap: float | None = None,
+                 eps: float = 1e-8) -> np.ndarray:
+    """
+    Vectorized, numerically stable lateral-friction-limited speed.
 
-    Analytic form when (|kappa| - mu*k_aero) > 0: v = sqrt(mu*g/(|kappa| - mu*k_aero)).
-    Otherwise (straights/very small curvature) -> +inf; optional clip to v_global_cap.
+    Uses v^2 * |kappa| <= mu * (g + k_aero * v^2).
+    For points where (|kappa| - mu*k_aero) <= eps we treat lateral limit as +inf
+    (i.e. not lateral-limited) to avoid huge / unstable v from tiny positive denom.
     """
     mu = params.mu_friction
     g = params.gravity
     k_a = params.k_aero()
+
     kap = np.abs(np.asarray(curvature, dtype=float))
+    # sanitize NaN/inf in curvature (optional but recommended)
+    kap = np.nan_to_num(kap, nan=0.0, posinf=0.0, neginf=0.0)
+
     denom = kap - mu * k_a
-    with np.errstate(divide="ignore", invalid="ignore"):
-        v = np.sqrt(np.maximum(mu * g, 0.0) / np.maximum(denom, 0.0))
-    v[denom <= 0.0] = np.inf
+
+    # start with +inf everywhere, fill only where denom > eps
+    v = np.full_like(denom, np.inf, dtype=float)
+
+    # mask where analytic solution is numerically safe
+    mask = denom > eps
+    if np.any(mask):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            # compute only on safe entries
+            v_safe = np.sqrt((mu * g) / denom[mask])
+        v[mask] = v_safe
+
+    # apply global cap if provided (works with np.inf)
     if v_global_cap is not None and np.isfinite(v_global_cap):
         v = np.minimum(v, v_global_cap)
+
     return v
+
 
 
 def speed_profile(points: Sequence[Point],
@@ -78,13 +99,14 @@ def speed_profile(points: Sequence[Point],
     """
     s, ds = compute_arc_length(points)
     kappa = compute_curvature(points)
+    kappa = np.nan_to_num(kappa, nan=0.0, posinf=0.0, neginf=0.0)
     kap = np.abs(kappa)
 
     # Power-based global speed cap (approx P = k_drag v^3)
     k_drag = params.k_drag()
     P = max(params.engine_power_watts, 0.0)
     v_power_limit = (P / max(k_drag, 1e-12)) ** (1.0 / 3.0)
-    margin = min(max(params.safety_speed_margin, 0.0), 1.0)
+    margin = min(max(params.safety_speed_margin, 0.0), 1.05)
     v_global_cap = max(v_power_limit * margin, 1.0)
 
     v_lat = vmax_lateral(kappa, params, v_global_cap=v_global_cap)
@@ -103,8 +125,8 @@ def speed_profile(points: Sequence[Point],
     k_a = params.k_aero()
     c_rr = max(params.c_rr, 0.0)
 
-    max_iter = 15
-    tol = 1e-3
+    max_iter = 50
+    tol = 1e-2
     for _ in range(max_iter):
         v_prev = v.copy()
 
@@ -112,7 +134,7 @@ def speed_profile(points: Sequence[Point],
         for i in range(n - 2, -1, -1):
             seg = max(ds[i], 1e-9)
             v_next = max(v[i + 1], 0.0)
-            v_ref = v_next
+            v_ref = max(v_next, v[i])
             g_eff = g + k_a * v_ref * v_ref
             a_total_brake = mu * g_eff
             a_lat = (v_ref * v_ref) * kap[i]

@@ -42,7 +42,7 @@ def resolve_points_file(args: argparse.Namespace) -> str | None:
     """Resolve the points file path from args or environment or default CSV."""
     points_file = args.points or os.environ.get("TRACK_POINTS_FILE")
     if not points_file:
-        default_csv = os.path.join(os.path.dirname(__file__), "data", "simple_track.csv")
+        default_csv = os.path.join(os.path.dirname(__file__), "data", "monza.csv")
         points_file = default_csv if os.path.isfile(default_csv) else None
     return points_file
 
@@ -203,13 +203,13 @@ def main() -> None:
             print("matplotlib is required. Install with: pip install matplotlib")
             return
 
-        raceline_csv = os.path.join(os.path.dirname(__file__), "..", "data", "raceline.csv")
-        raceline_csv = os.path.normpath(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "raceline.csv")))
+        raceline_csv = os.path.join(os.path.dirname(__file__), "..", "data", "monza_raceline.csv")
+        raceline_csv = os.path.normpath(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "monza_raceline.csv")))
         if not os.path.isfile(raceline_csv):
             # Fallback to repository root data/raceline.csv
-            raceline_csv = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "raceline.csv"))
+            raceline_csv = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "monza_raceline.csv"))
         if not os.path.isfile(raceline_csv):
-            print("Cannot find data/raceline.csv. Please place it under the repository data/ folder.")
+            print("Cannot find data/monza_raceline.csv. Please place it under the repository data/ folder.")
             return
 
         pts = load_points(raceline_csv)
