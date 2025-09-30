@@ -19,10 +19,10 @@ class VehicleParams:
     cL_downforce: float = 4.0
     frontal_area_m2: float = 1.6
     engine_power_watts: float = 735000.0
-    a_brake_max: float = 54.0  # m/s^2, hard cap for braking decel (system limit)
-    a_accel_cap: float = 20.0  # m/s^2, optional hard cap for longitudinal accel
-    cD_drag: float = 1.2       # aerodynamic drag coefficient
-    c_rr: float = 0.004        # rolling resistance coefficient (F1-like)
+    a_brake_max: float = 49.0  # m/s^2, hard cap for braking decel (system limit)
+    a_accel_cap: float = 18.0  # m/s^2, optional hard cap for longitudinal accel
+    cD_drag: float = 1.0       # aerodynamic drag coefficient
+    c_rr: float = 0.01        # rolling resistance coefficient (F1-like)
     safety_speed_margin: float = 1.00  # multiplier for global power cap (≤ 1.0)
     brake_power_watts: float | None = None  # optional power dissipation limit for braking
 

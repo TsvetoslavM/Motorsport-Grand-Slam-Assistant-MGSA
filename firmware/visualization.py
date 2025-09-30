@@ -536,6 +536,39 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
             vopt_arr = np.asarray(raceline_vopt, dtype=float).reshape(-1) if raceline_vopt is not None else None
             have_vmax = vmax_arr is not None and vmax_arr.size == rp.shape[0]
             have_vopt = vopt_arr is not None and vopt_arr.size == rp.shape[0]
+            # Compute cumulative time along the raceline using trapezoidal integration
+            cum_time = None
+            if have_vopt:
+                try:
+                    # Local import to avoid heavy dependency at module import time
+                    from .vmax_raceline.vmax import compute_arc_length
+                except Exception:
+                    compute_arc_length = None
+                if compute_arc_length is not None:
+                    s, ds = compute_arc_length(rp)
+                    # Trapezoidal average speed per segment
+                    v0 = np.maximum(vopt_arr[:-1], 1e-3)
+                    v1 = np.maximum(vopt_arr[1:], 1e-3)
+                    v_avg = 0.5 * (v0 + v1)
+                    dt = np.zeros_like(s)
+                    if ds.size == v_avg.size and ds.size > 0:
+                        dt[1:] = ds / v_avg
+                    cum_time = np.cumsum(dt)
+
+            def _format_time_mm_ss_cs(seconds: float) -> str:
+                if not np.isfinite(seconds) or seconds < 0:
+                    return "-"
+                minutes = int(seconds // 60)
+                sec = int(seconds % 60)
+                centi = int(round((seconds - minutes * 60 - sec) * 100))
+                # Handle rounding overflow (e.g., 59.995 -> 60.00)
+                if centi >= 100:
+                    centi -= 100
+                    sec += 1
+                    if sec >= 60:
+                        sec -= 60
+                        minutes += 1
+                return f"{minutes}.{sec:02d}.{centi:02d}"
             for i in range(rp.shape[0]):
                 parts = [f"x: {rx[i]:.3f}", f"y: {ry[i]:.3f}"]
                 if have_vmax:
@@ -547,6 +580,8 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                 if have_vopt:
                     kmh = float(vopt_arr[i]) * 3.6
                     parts.append(f"optimal: {kmh:.1f} km/h")
+                if cum_time is not None and i < cum_time.size:
+                    parts.append(f"time: {_format_time_mm_ss_cs(float(cum_time[i]))}")
                 text.append("<br>".join(parts))
 
             before = len(fig.data)
