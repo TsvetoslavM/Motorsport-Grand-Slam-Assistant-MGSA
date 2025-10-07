@@ -427,7 +427,7 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                         x=edge_pts[:, 0],
                         y=edge_pts[:, 1],
                         mode="lines",
-                        line=dict(color=color, width=6),
+                        line=dict(color=color, width=1),
                         name=name,
                         hoverinfo="skip",
                         showlegend=show_in_legend,
@@ -516,10 +516,10 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                     name="Turn numbers",
                     text=label_text,
                     textposition="middle center",
-                    textfont=dict(color="blue", size=12),
+                    textfont=dict(color="blue", size=10),
                     marker=dict(size=marker_size, color="white", line=dict(color="blue", width=2)),
                     hoverinfo="skip",
-                    showlegend=True,
+                    showlegend=False,
                 ))
                 labels_trace_index = before
         except Exception as e:
@@ -590,8 +590,8 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                 y=ry,
                 name="Racing line",
                 mode="lines+markers",
-                line=dict(color="blue", width=3),
-                marker=dict(color="blue", size=3),
+                line=dict(color="gray", width=2),
+                marker=dict(color="blue", size=1),
                 showlegend=True,
                 text=text,
                 hovertemplate="%{text}<extra></extra>",
@@ -631,7 +631,7 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
     except Exception as e:
         print(f"Failed to add toggle buttons: {e}")
 
-    fig.update_layout(title=title, yaxis_scaleanchor="x", yaxis_scaleratio=1, plot_bgcolor="white")
+    fig.update_layout(title=title, plot_bgcolor="white")
     return _write_html_with_css(fig, output_html, css_text=css_text, css_file=css_file)
 
 

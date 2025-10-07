@@ -48,10 +48,6 @@ html, body {
   box-shadow: var(--elev-1);
   transition: box-shadow var(--transition), transform var(--transition);
 }
-.js-plotly-plot:hover, .plot-container:hover {
-  box-shadow: var(--elev-2);
-  transform: translateY(-1px);
-}
 
 /* Plot background color harmonize */
 .js-plotly-plot .plotly .bg {
