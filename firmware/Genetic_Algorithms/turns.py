@@ -82,20 +82,20 @@ class GAParams:
     crossover_rate: float = 0.9
     tournament_k: int = 4
     # Objective prioritizes minimum lap time; penalties are light regularization
-    smoothness_lambda: float = 0.008
-    offset_smooth_lambda: float = 0.06
-    curvature_lambda: float = 0.002
-    curvature_jerk_lambda: float = 0.001
+    smoothness_lambda: float = 0.0016
+    offset_smooth_lambda: float = 0.012
+    curvature_lambda: float = 0.0004
+    curvature_jerk_lambda: float = 0.0002
     center_deviation_lambda: float = 0.00
     # Longitudinal dynamics realism (accel/brake and jerk)
-    long_accel_lambda: float = 0.002
-    long_jerk_lambda: float = 0.001
+    long_accel_lambda: float = 0.0002
+    long_jerk_lambda: float = 0.0002
     # Single-resolution GA (no coarse/refine stages)
     # Smoothness hardening (limit kinks)
     alpha_delta_max: float = 0.15  # max change between consecutive alphas
     alpha_rate_lambda: float = 1.0
     heading_max_delta_rad: float = 0.35  # ~20 degrees per segment
-    heading_spike_lambda: float = 0.05
+    heading_spike_lambda: float = 0.01
     # Vehicle/dynamics parameters (forwarded to VehicleParams)
     mass_kg: float = 798.0
     mu_friction: float = 2.0
@@ -124,7 +124,7 @@ class GAParams:
     coarse_to_fine: bool = True
     coarse_factor: float = 0.25  # fraction of samples in coarse stage
     curvature_sampling_beta: float = 2.0  # weight curvature in adaptive sampling
-    adaptive_penalty_decay: float = 0.8  # stronger decay: penalties -> ~20% at end
+    adaptive_penalty_decay: float = 0.95  # stronger decay: penalties -> ~5% at end
     diversity_target: float = 0.05  # target std of alphas for diversity scaling
     # Missing earlier; used by offset/selection helpers
     group_step: int = 1
@@ -150,7 +150,7 @@ class GAParams:
     population_min_ratio: float = 0.5
     population_max_ratio: float = 1.5
     # Weighted fitness controls
-    time_weight: float = 100.0
+    time_weight: float = 800.0
     penalty_weight: float = 1.0
     adaptive_time_weight: bool = True
     # Internal per-generation weights (set in params_for_gen)
@@ -536,25 +536,6 @@ def evaluate_individual_corridor(inner: np.ndarray, outer: np.ndarray, alphas: n
         penalty += params.alpha_rate_lambda * float(np.mean(excess * excess))
     penalty += params.smoothness_lambda * path_roughness_penalty(path_pts)
     penalty += params.curvature_lambda * curvature_penalty(path_pts)
-    penalty += params.curvature_jerk_lambda * curvature_jerk_penalty(path_pts)
-    # Lateral jerk penalty: a_lat = v^2 * kappa; penalize mean squared delta
-    try:
-        kappa_series = estimate_curvature_series(path_pts)
-        if kappa_series.size == s_arr.size:
-            a_lat = (v_arr * v_arr) * kappa_series
-            if a_lat.size >= 3:
-                da = np.diff(a_lat)
-                penalty += 0.5 * float(np.mean(da * da))
-    except Exception:
-        pass
-    # Adaptive safety margin: additional penalty in high curvature areas
-    try:
-        kappa_abs = np.abs(estimate_curvature_series(path_pts))
-        local_margin = 1.0 - np.clip(kappa_abs * 15.0, 0.0, 0.3)
-        # Penalize low local margins (proxy to require more caution)
-        penalty += 0.02 * float(np.mean((1.0 - local_margin) ** 2))
-    except Exception:
-        pass
     penalty += params.heading_spike_lambda * heading_spike_penalty(path_pts, params.heading_max_delta_rad)
     penalty += params.center_deviation_lambda * float(np.mean((alphas - 0.5) * (alphas - 0.5)))
     # Longitudinal accel/brake over-limit penalties
@@ -586,26 +567,7 @@ def evaluate_individual_corridor(inner: np.ndarray, outer: np.ndarray, alphas: n
     except Exception:
         pass
 
-    # Load transfer + load sensitivity (effective mu adjustment proxy)
-    try:
-        kappa_series2 = estimate_curvature_series(path_pts)
-        if kappa_series2.size == v_arr.size:
-            a_lat_series = (v_arr * v_arr) * np.abs(kappa_series2)
-            # Simple CoG and track width constants
-            cog_h = 0.3
-            track_w = 1.5
-            fz_nominal = 0.5 * params.mass_kg * params.gravity
-            delta_fz = params.mass_kg * a_lat_series * cog_h / max(track_w, 1e-3)
-            mu_outer = params.mu_friction * np.power(1.0 + delta_fz / max(fz_nominal, 1e-3), -0.1)
-            mu_inner = params.mu_friction * np.power(np.maximum(1.0 - delta_fz / max(fz_nominal, 1e-3), 1e-3), -0.1)
-            mu_effective = 0.5 * (mu_outer + mu_inner)
-            # Penalize regions where lateral demand exceeds effective grip envelope
-            max_a_lat = mu_effective * params.gravity
-            lat_excess = np.clip(a_lat_series - max_a_lat, 0.0, None)
-            if lat_excess.size > 0:
-                penalty += 0.05 * float(np.mean((lat_excess / np.maximum(max_a_lat, 1e-3)) ** 2))
-    except Exception:
-        pass
+    # Removed optional penalties: lateral jerk, adaptive safety margin, load transfer
 
     # Curvature constraints and straightness incentives
     try:
