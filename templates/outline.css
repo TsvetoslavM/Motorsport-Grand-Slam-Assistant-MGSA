@@ -9,24 +9,43 @@
   --accent: #0ea5e9;   /* cyan-500 */
   --accent-strong: #0284c7; /* cyan-600 */
   --accent-hover: #22d3ee; /* cyan-400 */
+  --success: #10b981; /* emerald-500 */
+  --warning: #f59e0b; /* amber-500 */
+  --danger: #ef4444; /* red-500 */
   --elev-1: 0 10px 25px rgba(15, 23, 42, 0.08), 0 2px 8px rgba(15, 23, 42, 0.06);
   --elev-2: 0 14px 35px rgba(15, 23, 42, 0.12), 0 6px 14px rgba(15, 23, 42, 0.08);
+  --elev-3: 0 20px 50px rgba(15, 23, 42, 0.15), 0 10px 25px rgba(15, 23, 42, 0.1);
   --radius-lg: 14px;
   --radius-md: 10px;
   --radius-sm: 8px;
+  --radius-xl: 20px;
   --transition: 180ms cubic-bezier(.2,.8,.2,1);
+  --transition-slow: 300ms cubic-bezier(.2,.8,.2,1);
+  --gradient-primary: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  --gradient-success: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+  --gradient-warning: linear-gradient(135deg, var(--warning) 0%, #d97706 100%);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --page-bg-top: #0b1220;
     --page-bg-bottom: #111827;
-    --card-bg: #111827;
+    --card-bg: #1e293b;
     --text: #f8fafc;
     --muted: #cbd5e1;
     --grid: rgba(148, 163, 184, 0.18);
+    --accent: #22d3ee; /* cyan-400 for dark mode */
+    --accent-strong: #06b6d4; /* cyan-500 for dark mode */
+    --accent-hover: #67e8f9; /* cyan-300 for dark mode */
+    --success: #34d399; /* emerald-400 for dark mode */
+    --warning: #fbbf24; /* amber-400 for dark mode */
+    --danger: #f87171; /* red-400 for dark mode */
     --elev-1: 0 10px 25px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
     --elev-2: 0 18px 40px rgba(0,0,0,.55), 0 10px 18px rgba(0,0,0,.4);
+    --elev-3: 0 25px 60px rgba(0,0,0,.6), 0 15px 30px rgba(0,0,0,.45);
+    --gradient-primary: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+    --gradient-success: linear-gradient(135deg, var(--success) 0%, #10b981 100%);
+    --gradient-warning: linear-gradient(135deg, var(--warning) 0%, #f59e0b 100%);
   }
 }
 
@@ -37,21 +56,50 @@ html, body {
   background: linear-gradient(180deg, var(--page-bg-top) 0%, var(--page-bg-bottom) 100%);
   color: var(--text);
   font-family: Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Simplified background pattern - no animation for better performance */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    radial-gradient(circle at 20% 80%, rgba(14, 165, 233, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(16, 185, 129, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
 }
 
 /* Center the plot and add a subtle card effect */
 .js-plotly-plot, .plot-container {
   max-width: 1200px;
   margin: 24px auto;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--card-bg);
   box-shadow: var(--elev-1);
-  transition: box-shadow var(--transition), transform var(--transition);
+  transition: box-shadow var(--transition-slow), transform var(--transition-slow), border var(--transition);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
 }
-.js-plotly-plot:hover, .plot-container:hover {
-  box-shadow: var(--elev-2);
-  transform: translateY(-1px);
+
+.js-plotly-plot::before, .plot-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  z-index: 1;
 }
+
+
 
 /* Plot background color harmonize */
 .js-plotly-plot .plotly .bg {
@@ -80,52 +128,104 @@ html, body {
 
 /* Legend styling */
 .js-plotly-plot .plotly .legend {
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(2, 6, 23, 0.08);
-  border-radius: var(--radius-md);
-  backdrop-filter: saturate(130%) blur(6px);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  border-radius: var(--radius-lg);
+  backdrop-filter: saturate(130%) blur(12px);
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.08);
   max-height: 60vh;
   overflow: auto;
+  transition: all var(--transition);
+  padding: 8px;
 }
+
+.js-plotly-plot .plotly .legend:hover {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.15), 0 4px 12px rgba(15, 23, 42, 0.1);
+}
+
 .js-plotly-plot .plotly .legend text {
   fill: var(--text) !important;
   font-size: 13px !important;
+  font-weight: 500;
+  transition: all var(--transition);
 }
+
 .js-plotly-plot .plotly .legend .traces:hover text {
-  filter: brightness(1.1);
+  fill: var(--accent) !important;
+  font-weight: 600;
+  transform: translateX(2px);
+}
+
+.js-plotly-plot .plotly .legend .traces:hover .legendtoggle {
+  transform: scale(1.1);
 }
 
 /* Modebar (toolbar) modern look */
 .modebar {
-  background: rgba(255, 255, 255, 0.9) !important;
+  background: rgba(255, 255, 255, 0.95) !important;
   border: 1px solid rgba(2, 6, 23, 0.08) !important;
-  border-radius: var(--radius-md) !important;
-  backdrop-filter: saturate(130%) blur(6px);
+  border-radius: var(--radius-lg) !important;
+  backdrop-filter: saturate(130%) blur(12px);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
+  transition: all var(--transition);
 }
+
+.modebar:hover {
+  background: rgba(255, 255, 255, 1) !important;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.15);
+  transform: translateY(-1px);
+}
+
+.modebar-btn {
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--transition) !important;
+}
+
+.modebar-btn:hover {
+  background: rgba(14, 165, 233, 0.1) !important;
+  transform: scale(1.05) !important;
+}
+
 .modebar-btn svg {
   fill: var(--muted) !important;
   transition: fill var(--transition), transform var(--transition);
 }
+
 .modebar-btn:hover svg {
-  fill: var(--text) !important;
-  transform: translateY(-1px);
+  fill: var(--accent) !important;
+  transform: scale(1.1);
 }
 
 /* Updatemenus (buttons) styling */
 .js-plotly-plot .plotly .updatemenu-group .updatemenu-button rect {
   fill: var(--accent);
   stroke: var(--accent-strong);
-  stroke-width: 1.2px;
+  stroke-width: 1.5px;
   rx: 9999px; /* pill */
+  transition: all var(--transition);
+  filter: drop-shadow(0 2px 4px rgba(14, 165, 233, 0.3));
 }
+
 .js-plotly-plot .plotly .updatemenu-group .updatemenu-button:hover rect {
   fill: var(--accent-hover);
+  stroke: var(--accent);
+  stroke-width: 2px;
+  filter: drop-shadow(0 4px 8px rgba(14, 165, 233, 0.4));
+  transform: translateY(-1px);
 }
+
 .js-plotly-plot .plotly .updatemenu-group .updatemenu-button text {
   fill: #ffffff !important;
   font-weight: 700;
-  letter-spacing: .2px;
+  letter-spacing: .3px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: all var(--transition);
+}
+
+.js-plotly-plot .plotly .updatemenu-group .updatemenu-button:hover text {
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+  transform: scale(1.05);
 }
 
 /* Turn number markers: improve text legibility (text drawn in SVG)
@@ -135,9 +235,15 @@ html, body {
   stroke-width: 3px;
 } */
 
-/* Fancy badge look for turn numbers (markers) */
+/* Simplified turn number markers for better performance */
 .js-plotly-plot .plotly .scatter .points path {
-  filter: drop-shadow(0 2px 4px rgba(15,23,42,.18));
+  filter: drop-shadow(0 2px 4px rgba(15,23,42,.15));
+}
+
+/* Simplified turn number text styling */
+.js-plotly-plot .plotly .scatter .text {
+  font-weight: 700 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
 }
 
 /* Small screens */
@@ -150,6 +256,56 @@ html, body {
     right: 6px !important;
     top: 6px !important;
   }
+}
+
+/* Additional modern styling enhancements */
+
+/* Smooth scrolling for the entire page */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Enhanced focus states for accessibility */
+.js-plotly-plot:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+/* Simplified plot container - no animation for better performance */
+.js-plotly-plot, .plot-container {
+  opacity: 1;
+}
+
+/* Enhanced hover effects for plot elements */
+.js-plotly-plot .plotly .hovertext {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(14, 165, 233, 0.2) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.15) !important;
+  backdrop-filter: blur(8px) !important;
+  font-weight: 500 !important;
+}
+
+/* Simplified line styling for better performance */
+.js-plotly-plot .plotly .scatter[data-name*="Racing line"] .lines path {
+  filter: drop-shadow(0 1px 2px rgba(14, 165, 233, 0.2));
+}
+
+.js-plotly-plot .plotly .scatter[data-name*="Turn"] .lines path {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.1));
+}
+
+.js-plotly-plot .plotly .scatter[data-name*="Straight"] .lines path {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.1));
+}
+
+.js-plotly-plot .plotly .scatter[data-name*="Track outline"] .lines path {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.05));
+}
+
+/* Performance optimization - disable will-change for better performance */
+.js-plotly-plot * {
+  will-change: auto;
 }
 
 

@@ -392,9 +392,27 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
         right_edge_bg = _chaikin_open(right_edge_bg, iterations=smooth_iterations)
 
     fig = go.Figure()
-        # Close the outline by connecting right edge back to left edge (background polygon)
+    
+    # Add the track outline as a filled polygon with subtle styling
     poly_x = list(left_edge_bg[:,0]) + list(right_edge_bg[::-1,0]) + [left_edge_bg[0,0]]
     poly_y = list(left_edge_bg[:,1]) + list(right_edge_bg[::-1,1]) + [left_edge_bg[0,1]]
+    
+    # Add the track outline polygon with brighter styling
+    fig.add_trace(go.Scatter(
+        x=poly_x,
+        y=poly_y,
+        mode="lines",
+        fill="toself",
+        fillcolor="rgba(240, 248, 255, 1.6)",
+        line=dict(
+            color="rgba(148, 163, 184, 0.3)",
+            width=1
+        ),
+        name="Track outline",
+        hoverinfo="skip",
+        showlegend=False,
+        opacity=0.7
+    ))
 
     # Optionally add colored edges (unsmoothed, to align with segmentation indices)
     if color_edges_by_turns:
@@ -427,10 +445,14 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                         x=edge_pts[:, 0],
                         y=edge_pts[:, 1],
                         mode="lines",
-                        line=dict(color=color, width=6),
+                        line=dict(
+                            color=color, 
+                            width=5
+                        ),
                         name=name,
                         hoverinfo="skip",
                         showlegend=show_in_legend,
+                        opacity=0.8
                     )
                 )
                 idx = before
@@ -448,6 +470,8 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
             label_y: list[float] = []
             label_text: list[str] = []
             label_sizes: list[float] = []
+            turn_positions: list[tuple[float, float]] = []  # Store turn positions for overlap detection
+            
             for seg in segments:
                 start = max(0, int(seg["start_idx"]))
                 end = min(len(pts) - 1, int(seg["end_idx"]))
@@ -457,8 +481,8 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                     turn_index += 1
                     turn_name = f"Turn {turn_index}"
                     # Show legend only once per turn (left edge)
-                    idx_left = _add_edge_chunk(left_edge_raw[start:end + 1], color="blue", name=turn_name, show_in_legend=True)
-                    _ = _add_edge_chunk(right_edge_raw[start:end + 1], color="blue", name=turn_name, show_in_legend=False)
+                    idx_left = _add_edge_chunk(left_edge_raw[start:end + 1], color="rgba(2, 132, 199, 0.9)", name=turn_name, show_in_legend=True)
+                    _ = _add_edge_chunk(right_edge_raw[start:end + 1], color="rgba(2, 132, 199, 0.9)", name=turn_name, show_in_legend=False)
                     if idx_left >= 0:
                         turn_edge_trace_indices.append(idx_left)
                     # Add numeric label marker (circle+text) offset off the track
@@ -466,14 +490,33 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                     # Choose offset direction by available width
                     left_w = float(lw[mid]) if mid < len(lw) else 0.0
                     right_w = float(rw[mid]) if mid < len(rw) else 0.0
-                    # Always place on the left side of travel (normal direction)
-                    side = 15.0
-                    offset_dist = max(left_w, 1e-6) * 1.5
+                    
+                    # Check if this turn is too close to any previous turn
+                    min_distance = 0.08 * scale_ref  # Minimum distance between turn markers
+                    is_too_close = False
+                    for prev_x, prev_y in turn_positions:
+                        dist = np.sqrt((pts[mid, 0] - prev_x)**2 + (pts[mid, 1] - prev_y)**2)
+                        if dist < min_distance:
+                            is_too_close = True
+                            break
+                    
+                    # Determine placement side: alternate between inside and outside for close turns
+                    if is_too_close and turn_index % 2 == 0:
+                        # Place inside track (negative side)
+                        side = -25.0
+                        offset_dist = max(min(left_w, right_w), 1e-6) * 0.9
+                    else:
+                        # Place outside track (positive side)
+                        side = 15.0
+                        offset_dist = max(left_w, 1e-6) * 1.5
+                    
                     ax = float(pts[mid, 0] + n[mid, 0] * side * offset_dist)
                     ay = float(pts[mid, 1] + n[mid, 1] * side * offset_dist)
+                    
                     # Circle radius, relative to track size but not too big
                     r = max(0.012 * scale_ref, 0.2 * max(left_w, right_w, 1e-6))
-                    # Prevent overlaps by pushing further along the left normal until no intersection
+                    
+                    # Prevent overlaps by pushing further along the normal until no intersection
                     def _overlaps_any(px: float, py: float, pr: float) -> bool:
                         for (qx, qy, qr) in zip(label_x, label_y, label_sizes):
                             dx = px - qx
@@ -481,20 +524,31 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                             if (dx*dx + dy*dy) < (pr + qr) * (pr + qr):
                                 return True
                         return False
-                    while _overlaps_any(ax, ay, r):
+                    
+                    # Try different positions if there's overlap
+                    attempts = 0
+                    while _overlaps_any(ax, ay, r) and attempts < 5:
                         offset_dist += r * 0.6
                         ax = float(pts[mid, 0] + n[mid, 0] * side * offset_dist)
                         ay = float(pts[mid, 1] + n[mid, 1] * side * offset_dist)
+                        attempts += 1
+                    
+                    # If still overlapping, try the opposite side
+                    if _overlaps_any(ax, ay, r):
+                        side = -side
+                        offset_dist = max(min(left_w, right_w), 1e-6) * 0.8
+                        ax = float(pts[mid, 0] + n[mid, 0] * side * offset_dist)
+                        ay = float(pts[mid, 1] + n[mid, 1] * side * offset_dist)
+                    
                     label_x.append(ax)
                     label_y.append(ay)
                     label_text.append(str(turn_index))
-                    # Plotly marker size is in px; map world radius to a reasonable px size
-                    # Use a fixed size for consistency but keep list for future tuning
                     label_sizes.append(r)
+                    turn_positions.append((float(pts[mid, 0]), float(pts[mid, 1])))
                 else:
                     # Straights: draw but do not show in legend
-                    idx_s_left = _add_edge_chunk(left_edge_raw[start:end + 1], color="black", name="Straight", show_in_legend=False)
-                    _ = _add_edge_chunk(right_edge_raw[start:end + 1], color="black", name="Straight", show_in_legend=False)
+                    idx_s_left = _add_edge_chunk(left_edge_raw[start:end + 1], color="rgba(51, 65, 85, 0.7)", name="Straight", show_in_legend=False)
+                    _ = _add_edge_chunk(right_edge_raw[start:end + 1], color="rgba(51, 65, 85, 0.7)", name="Straight", show_in_legend=False)
                     if idx_s_left >= 0:
                         straight_edge_trace_indices.append(idx_s_left)
         except Exception as e:
@@ -516,8 +570,18 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                     name="Turn numbers",
                     text=label_text,
                     textposition="middle center",
-                    textfont=dict(color="blue", size=12),
-                    marker=dict(size=marker_size, color="white", line=dict(color="blue", width=2)),
+                    textfont=dict(
+                        color="white", 
+                        size=14,
+                        family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+                    ),
+                    marker=dict(
+                        size=marker_size, 
+                        color="rgba(14, 165, 233, 0.9)",
+                        line=dict(color="white", width=3),
+                        symbol="circle",
+                        opacity=0.9
+                    ),
                     hoverinfo="skip",
                     showlegend=True,
                 ))
@@ -590,11 +654,17 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                 y=ry,
                 name="Racing line",
                 mode="lines+markers",
-                line=dict(color="blue", width=3),
-                marker=dict(color="blue", size=3),
+                line=dict(
+                    color="lightslategrey",
+                    width=3
+                ),
+                marker=dict(
+                    color="dark blue",
+                    size=3
+                ),
                 showlegend=True,
                 text=text,
-                hovertemplate="%{text}<extra></extra>",
+                hovertemplate="%{text}<extra></extra>"
             ))
             raceline_trace_index = before
 
@@ -611,6 +681,10 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
         vis_race_only = [False] * total_traces
         if raceline_trace_index is not None:
             vis_race_only[raceline_trace_index] = True
+        # Hide racing line only: hide raceline but show everything else
+        vis_no_raceline = vis_all.copy()
+        if raceline_trace_index is not None:
+            vis_no_raceline[raceline_trace_index] = False
 
         fig.update_layout(
             updatemenus=[dict(
@@ -624,6 +698,7 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                     dict(label="All", method="update", args=[{"visible": vis_all}]),
                     dict(label="Hide turn numbers", method="update", args=[{"visible": vis_no_labels}]),
                     dict(label="Racing line only", method="update", args=[{"visible": vis_race_only}]),
+                    dict(label="Hide racing line", method="update", args=[{"visible": vis_no_raceline}]),
                 ],
                 showactive=True,
             )]
@@ -631,7 +706,56 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
     except Exception as e:
         print(f"Failed to add toggle buttons: {e}")
 
-    fig.update_layout(title=title, yaxis_scaleanchor="x", yaxis_scaleratio=1, plot_bgcolor="white")
+    # Optimized layout configuration for better performance
+    fig.update_layout(
+        title=dict(
+            text=title,
+            font=dict(size=24, color="#0f172a"),
+            x=0.1,
+            xanchor="center",
+            pad=dict(t=15, b=20)
+        ),
+        yaxis=dict(
+            scaleanchor="x",
+            scaleratio=1,
+            showgrid=True,
+            gridcolor="rgba(2, 6, 23, 0.01)",
+            gridwidth=1,
+            zeroline=False,
+            showline=False,
+            tickfont=dict(size=11, color="#334155")
+        ),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(2, 6, 23, 0.06)",
+            gridwidth=1,
+            zeroline=False,
+            showline=False,
+            tickfont=dict(size=11, color="#334155")
+        ),
+        plot_bgcolor="white",
+        paper_bgcolor="rgba(255, 255, 255, 0.1)",
+        font=dict(size=11, color="#0f172a"),
+        margin=dict(l=50, r=50, t=60, b=50),
+        hovermode="closest",
+        hoverlabel=dict(
+            bgcolor="white",
+            bordercolor="rgba(14, 165, 233, 0.2)",
+            font_size=11,
+            font_color="white"
+        ),
+        legend=dict(
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="rgba(2, 6, 23, 0.08)",
+            borderwidth=1,
+            font=dict(size=12, color="#0f172a"),
+            x=1.02,
+            y=1,
+            xanchor="left",
+            yanchor="top"
+        )
+    )
+    
     return _write_html_with_css(fig, output_html, css_text=css_text, css_file=css_file)
 
 
