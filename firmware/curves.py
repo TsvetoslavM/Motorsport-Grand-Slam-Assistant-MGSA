@@ -16,6 +16,7 @@ from .vmax_raceline import VehicleParams, speed_profile, export_csv, plot_speed_
 import os
 import argparse
 import json
+from datetime import datetime
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,6 +112,19 @@ def handle_outline_render(args: argparse.Namespace) -> None:
         if ok:
             print(f"Wrote outline HTML to {args.outline_web}")
 
+        # Also export per-segment CSVs based on available geometry (prefer centerline with widths)
+        try:
+            # Prefer using centerline-with-widths so we can compute left/right edges for inner/outer
+            export_points = cws
+            if export_points and len(export_points) >= 3:
+                curvs_for_export = curvature_vectorized(export_points)
+                mad_value = getattr(args, "turns_factor", None)
+                if mad_value is None:
+                    mad_value = getattr(args, "factor", 3.0)
+                export_segments_csv(export_points, curvs_for_export, base_output_dir=None, mad_factor=mad_value)
+        except Exception as e:
+            print(f"Failed to export segment CSVs (outline flow): {e}")
+
         if args.mad:
             if raceline_pts is None:
                 print("MAD requested but no raceline provided. Use --raceline <path>.")
@@ -180,6 +194,119 @@ def export_turns_straights(points: list[tuple[float, float]], curvs, args: argpa
         print(f"Wrote HTML to {args.turns_web}")
 
 
+def export_segments_csv(points: list[tuple[float, float]] | list[tuple[float, float, float, float]], curvs, base_output_dir: str | None = None, mad_factor: float = 3.0) -> str | None:
+    """Create a new folder and write CSV files with edge coordinates for each turn and straight.
+
+    - Output columns: x_l, y_l, x_r, y_r (left and right edges)
+    - Folder name: data/segments_YYYYMMDD_HHMMSS under repository root (or provided base_output_dir)
+    - Files:
+        Turn_1.csv, Turn_2.csv, ... for turns
+        Straight_1.csv, Straight_2.csv, ... for straights
+
+    If input points include widths as (x, y, left, right), edges are computed using those widths.
+    Otherwise, edges fall back to the centerline duplicated on both sides.
+
+    Returns the created directory path, or None on failure.
+    """
+    try:
+        from .segmentation import segment_by_median_mad as _seg_fn
+        import csv as _csv
+        import numpy as _np
+    except Exception as e:
+        print(f"Cannot export segments CSV: missing dependencies: {e}")
+        return None
+
+    # Harmonize curvature length to points length if needed
+    pts = list(points)
+    curvatures = _np.asarray(curvs, dtype=float)
+    if len(curvatures) != len(pts):
+        if len(curvatures) == max(len(pts) - 2, 0):
+            curvatures = _np.pad(curvatures, (1, 1), mode="edge")
+        else:
+            curvatures = _np.interp(_np.arange(len(pts)),
+                                    _np.linspace(0, len(pts) - 1, max(len(curvatures), 2)),
+                                    curvatures if len(curvatures) > 0 else _np.zeros(2))
+
+    segments = _seg_fn(curvatures, factor=mad_factor, points=pts)
+
+    # Resolve output directory
+    if base_output_dir is None:
+        firmware_dir = os.path.normpath(os.path.dirname(__file__))
+        turns_base_dir = os.path.join(firmware_dir, "Turns")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.join(turns_base_dir, f"segments_{timestamp}")
+    else:
+        out_dir = base_output_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    turn_idx = 0
+    straight_idx = 0
+
+    def _write_csv(path: str, rows: list[tuple[float, float, float, float]]):
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = _csv.writer(f)
+            writer.writerow(["x_l", "y_l", "x_r", "y_r"])
+            for x_l, y_l, x_r, y_r in rows:
+                writer.writerow([float(x_l), float(y_l), float(x_r), float(y_r)])
+
+    def _compute_edges_for_slice(start_idx: int, end_idx: int) -> list[tuple[float, float, float, float]]:
+        # inclusive slice indices
+        idxs = list(range(start_idx, end_idx + 1))
+        rows: list[tuple[float, float, float, float]] = []
+        # Determine whether points include widths per point
+        has_widths = len(pts) > 0 and isinstance(pts[0], (tuple, list)) and len(pts[0]) >= 4
+
+        for i in idxs:
+            p_i = pts[i]
+            if has_widths:
+                x, y, left_w, right_w = float(p_i[0]), float(p_i[1]), float(p_i[2]), float(p_i[3])
+            else:
+                x, y = float(p_i[0]), float(p_i[1])
+                left_w, right_w = 0.0, 0.0  # fallback when widths are unavailable
+
+            # Estimate tangent using neighbors for a stable normal
+            if i == 0:
+                x_prev, y_prev = float(pts[i][0]), float(pts[i][1])
+            else:
+                x_prev, y_prev = float(pts[i - 1][0]), float(pts[i - 1][1])
+            if i == len(pts) - 1:
+                x_next, y_next = float(pts[i][0]), float(pts[i][1])
+            else:
+                x_next, y_next = float(pts[i + 1][0]), float(pts[i + 1][1])
+
+            tx, ty = (x_next - x_prev), (y_next - y_prev)
+            norm = (_np.hypot(tx, ty) if (tx != 0.0 or ty != 0.0) else 1.0)
+            tx, ty = (tx / norm, ty / norm)
+            # Left normal is (-ty, tx)
+            nx_l, ny_l = -ty, tx
+            nx_r, ny_r = ty, -tx
+
+            x_l = x + nx_l * left_w
+            y_l = y + ny_l * left_w
+            x_r = x + nx_r * right_w
+            y_r = y + ny_r * right_w
+            rows.append((x_l, y_l, x_r, y_r))
+
+        return rows
+
+    for seg in segments:
+        start = max(0, int(seg["start_idx"]))
+        end = max(start, int(seg["end_idx"]))
+        # inclusive slice, compute edges (x_l,y_l,x_r,y_r)
+        edge_rows = _compute_edges_for_slice(start, end)
+        if seg["type"] == "turn":
+            turn_idx += 1
+            filename = f"Turn_{turn_idx}.csv"
+            _write_csv(os.path.join(out_dir, filename), edge_rows)
+        else:
+            straight_idx += 1
+            filename = f"Straight_{straight_idx}.csv"
+            _write_csv(os.path.join(out_dir, filename), edge_rows)
+
+    print(f"Wrote {turn_idx} turns and {straight_idx} straights to {out_dir}")
+    return out_dir
+
+
 def run_default_demo(points_file: str | None) -> None:
     """Execute the default demo flow when no explicit flags are provided."""
     import math
@@ -239,7 +366,7 @@ def main() -> None:
     handle_outline_render(args)
 
     # Operations requiring a points file
-    if (args.mad or args.heatmap or args.heatmap3d or args.web or args.web3d or args.turns_web) and points_file:
+    if (args.mad or args.heatmap or args.heatmap3d or args.web or args.web3d or args.turns_web or True) and points_file:
         pts = load_points(points_file)
         curvs = curvature_vectorized(pts)
 
@@ -249,6 +376,10 @@ def main() -> None:
         render_static_heatmaps(pts, curvs, points_file, heatmap_2d=args.heatmap, heatmap_3d=args.heatmap3d)
         export_web_heatmaps(pts, curvs, args, points_file)
         export_turns_straights(pts, curvs, args, points_file)
+
+        # Always export per-segment CSVs to a new folder on run
+        export_segments_csv(pts, curvs, base_output_dir=None, mad_factor=args.turns_factor)
+
 
     # If no explicit action flags were provided, run the default demo
     if not (args.mad or args.heatmap or args.heatmap3d or args.web or args.web3d or args.turns_web or (args.outline_csv and args.outline_web)):
