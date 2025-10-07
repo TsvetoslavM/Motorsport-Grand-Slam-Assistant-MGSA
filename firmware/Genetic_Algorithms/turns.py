@@ -4,13 +4,69 @@ import glob
 import math
 import random
 import time
-from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from dataclasses import dataclass, replace
+from typing import List, Tuple, Optional, Dict, Any
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
 from ..curvature import curvature_vectorized
 from ..vmax_raceline.vmax import VehicleParams, speed_profile, compute_lap_time_seconds
+from .ga_operators import vectorized_tournament_select, uniform_crossover, gaussian_mutation, adaptive_crossover_weighted
+from .geometry import (
+    resample_to_match as geom_resample_to_match,
+    resample_polyline_arclength as geom_resample_arclength,
+    resample_polyline_by_curvature as geom_resample_by_curvature,
+    estimate_curvature_series as geom_curvature_series,
+    compute_tangents_and_normals as geom_tangents_normals,
+)
+from .fitness import (
+    path_roughness_penalty as fit_path_roughness,
+    heading_spike_penalty as fit_heading_spike,
+    offsets_smoothness_penalty as fit_offsets_smooth,
+    curvature_limit_penalty as fit_curvature_limit,
+    straightness_reward as fit_straight_reward,
+    force_straight_alphas as fit_force_straight,
+    count_curvature_violations as fit_count_curv_viol,
+)
+from .population import compute_adaptive_population_size, adjust_population_size
+
+# Named constants
+EPSILON = 1e-9
+MIN_POINTS_FOR_CURVATURE = 3
+DEFAULT_SMOOTH_REPEATS = 2
+
+from collections import OrderedDict
+
+class LRUCache:
+    def __init__(self, max_size: int = 10000) -> None:
+        self.cache: "OrderedDict[Tuple[Any, ...], float]" = OrderedDict()
+        self.max_size = max_size
+
+    def get(self, key: Tuple[Any, ...]) -> Optional[float]:
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            return self.cache[key]
+        return None
+
+    def set(self, key: Tuple[Any, ...], value: float) -> None:
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = value
+        if len(self.cache) > self.max_size:
+            self.cache.popitem(last=False)
+from .geometry import (
+    resample_to_match as geom_resample_to_match,
+    resample_polyline_arclength as geom_resample_arclength,
+    resample_polyline_by_curvature as geom_resample_by_curvature,
+    estimate_curvature_series as geom_curvature_series,
+    compute_tangents_and_normals as geom_tangents_normals,
+)
+from .fitness import (
+    path_roughness_penalty as fit_path_roughness,
+    heading_spike_penalty as fit_heading_spike,
+    offsets_smoothness_penalty as fit_offsets_smooth,
+)
 
 
 Point = Tuple[float, float]
@@ -26,20 +82,20 @@ class GAParams:
     crossover_rate: float = 0.9
     tournament_k: int = 4
     # Objective prioritizes minimum lap time; penalties are light regularization
-    smoothness_lambda: float = 0.08
-    offset_smooth_lambda: float = 0.6
-    curvature_lambda: float = 0.02
-    curvature_jerk_lambda: float = 0.01
+    smoothness_lambda: float = 0.008
+    offset_smooth_lambda: float = 0.06
+    curvature_lambda: float = 0.002
+    curvature_jerk_lambda: float = 0.001
     center_deviation_lambda: float = 0.00
     # Longitudinal dynamics realism (accel/brake and jerk)
-    long_accel_lambda: float = 0.02
-    long_jerk_lambda: float = 0.01
+    long_accel_lambda: float = 0.002
+    long_jerk_lambda: float = 0.001
     # Single-resolution GA (no coarse/refine stages)
     # Smoothness hardening (limit kinks)
     alpha_delta_max: float = 0.15  # max change between consecutive alphas
     alpha_rate_lambda: float = 1.0
     heading_max_delta_rad: float = 0.35  # ~20 degrees per segment
-    heading_spike_lambda: float = 0.5
+    heading_spike_lambda: float = 0.05
     # Vehicle/dynamics parameters (forwarded to VehicleParams)
     mass_kg: float = 798.0
     mu_friction: float = 2.0
@@ -61,6 +117,57 @@ class GAParams:
     mutation_sigma_end: float = 0.05
     immigrants_fraction: float = 0.10
     stagnation_patience: int = 60
+    # Advanced GA controls
+    enable_parallel: bool = True
+    parallel_workers: int = max(1, os.cpu_count() or 1)
+    cache_granularity: float = 0.002
+    coarse_to_fine: bool = True
+    coarse_factor: float = 0.25  # fraction of samples in coarse stage
+    curvature_sampling_beta: float = 2.0  # weight curvature in adaptive sampling
+    adaptive_penalty_decay: float = 0.8  # stronger decay: penalties -> ~20% at end
+    diversity_target: float = 0.05  # target std of alphas for diversity scaling
+    # Missing earlier; used by offset/selection helpers
+    group_step: int = 1
+    use_straights_only: bool = False
+    curvature_threshold: float = 0.1
+    max_offset: float = 0.5
+    # Steering rate penalty weight
+    steering_rate_lambda: float = 0.3
+    # Curvature constraint tuning
+    max_curvature: float = 0.02
+    curvature_hardness: float = 30.0
+    curvature_hard_penalty: float = 100.0
+    curvature_soft_penalty: float = 5.0
+    straightness_bonus: float = 0.3
+    alpha_post_max_change: float = 0.005
+    # Adaptive crossover and B-spline controls
+    use_adaptive_crossover: bool = True
+    use_bspline: bool = True
+    bspline_smoothing: float = 0.0
+    bspline_degree: int = 3
+    # Dynamic population sizing
+    use_dynamic_population: bool = True
+    population_min_ratio: float = 0.5
+    population_max_ratio: float = 1.5
+    # Weighted fitness controls
+    time_weight: float = 100.0
+    penalty_weight: float = 1.0
+    adaptive_time_weight: bool = True
+    # Internal per-generation weights (set in params_for_gen)
+    current_time_weight: float = 1.0
+    current_penalty_weight: float = 1.0
+
+
+# In-memory cache for fitness evaluations (alpha vectors -> fitness), keyed by quantized tuple
+# Bounded LRU cache for fitness evaluations (alpha vectors -> fitness)
+_fitness_cache = LRUCache(max_size=10000)
+
+
+def _quantize_array(arr: np.ndarray, step: float) -> Tuple[float, ...]:
+    if arr.size == 0:
+        return ()
+    q = np.round(arr.astype(float) / float(step)) * float(step)
+    return tuple(np.clip(q, 0.0, 1.0).tolist())
 
 
 def load_latest_turn1_csv(base_dir: Optional[str] = None) -> str:
@@ -176,6 +283,38 @@ def resample_polyline_arclength(points: List[Point], target_n: int) -> np.ndarra
     return np.stack([x, y], axis=1)
 
 
+def resample_polyline_by_curvature(points: List[Point], target_n: int, beta: float = 2.0) -> np.ndarray:
+    pts = np.asarray(points, dtype=float)
+    if pts.shape[0] < 3 or target_n <= 2:
+        return resample_polyline_arclength(points, target_n)
+    # Base arclength parameter t in [0,1]
+    d = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(d)])
+    total = max(s[-1], 1e-9)
+    t = s / total
+    # Curvature estimate per vertex
+    kappa = estimate_curvature_series(pts)
+    kappa = np.abs(kappa)
+    # Sampling density proportional to 1 + beta * normalized curvature
+    if np.max(kappa) > 0:
+        k_norm = kappa / np.max(kappa)
+    else:
+        k_norm = kappa
+    density = 1.0 + float(beta) * k_norm
+    # Build cumulative density along t
+    # Use mid-segment densities for integration
+    seg_density = 0.5 * (density[:-1] + density[1:])
+    seg_len = np.diff(t)
+    weight = seg_density * seg_len
+    cumw = np.concatenate([[0.0], np.cumsum(weight)])
+    cumw /= max(cumw[-1], 1e-9)
+    tq = np.linspace(0.0, 1.0, target_n)
+    # Invert mapping cumw(t) -> t
+    x = np.interp(tq, cumw, pts[:, 0])
+    y = np.interp(tq, cumw, pts[:, 1])
+    return np.stack([x, y], axis=1)
+
+
 def chaikin_smooth(path_pts: np.ndarray, iterations: int = 2) -> np.ndarray:
     curve = path_pts.copy()
     for _ in range(max(0, iterations)):
@@ -232,9 +371,12 @@ def select_indices_group_and_straights(midline: np.ndarray, group_step: int, use
     return idxs
 
 
-def build_path_from_corridor(inner: np.ndarray, outer: np.ndarray, alphas: np.ndarray) -> np.ndarray:
-    """Interpolate between inner and outer edges per point: P = (1-alpha)*inner + alpha*outer."""
+def build_path_from_corridor(inner: np.ndarray, outer: np.ndarray, alphas: np.ndarray, params: Optional[GAParams] = None) -> np.ndarray:
+    """Interpolate between inner and outer edges; optionally use B-spline smoothing if enabled in params."""
     alphas = np.clip(alphas, 0.0, 1.0)
+    if params is not None and getattr(params, "use_bspline", False):
+        from .geometry import build_path_from_corridor_bspline
+        return build_path_from_corridor_bspline(inner, outer, alphas, smoothing=float(getattr(params, "bspline_smoothing", 0.0)), degree=int(getattr(params, "bspline_degree", 3)))
     return (1.0 - alphas)[:, None] * inner + alphas[:, None] * outer
 
 
@@ -358,13 +500,30 @@ def curvature_jerk_penalty(path_pts: np.ndarray) -> float:
     return float(np.mean(dk * dk) + (np.mean(d2k * d2k) if d2k.size > 0 else 0.0))
 
 
-# Offset evaluation removed (corridor-only GA)
+# Offset evaluation removed (corridor-only GA). Provide stubs to keep interface intact.
+def evaluate_individual_offset(base_pts: List[Point], base_normals: np.ndarray, offsets: np.ndarray, params: GAParams) -> float:
+    raise NotImplementedError("Offset mode is disabled in this build. Use corridor mode with inner/outer edges.")
+
+
+def build_offset_path(pts_list: List[Point], normals: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+    pts = np.asarray(pts_list, dtype=float)
+    offsets = np.asarray(offsets, dtype=float)
+    if normals.shape[0] != pts.shape[0] or offsets.size != pts.shape[0]:
+        raise ValueError("Mismatched shapes for offset path construction")
+    return pts + normals * offsets[:, None]
 
 
 def evaluate_individual_corridor(inner: np.ndarray, outer: np.ndarray, alphas: np.ndarray, params: GAParams) -> float:
     alphas = np.clip(alphas, 0.0, 1.0)
-    path_pts = build_path_from_corridor(inner, outer, alphas)
+    path_pts = build_path_from_corridor(inner, outer, alphas, params)
     t, s_arr, v_arr, a_long = compute_time_and_dynamics(path_pts, params)
+    # Death penalty for hard curvature constraint (20% tolerance)
+    try:
+        kappa_abs_hard = np.abs(estimate_curvature_series(path_pts))
+        if kappa_abs_hard.size > 0 and float(np.max(kappa_abs_hard)) > float(params.max_curvature) * 1.2:
+            return 1e9
+    except Exception:
+        pass
     # Smooth alpha variation to avoid zig-zag
     d1 = np.diff(alphas)
     d2 = np.diff(alphas, n=2) if len(alphas) > 2 else np.array([0.0])
@@ -378,6 +537,24 @@ def evaluate_individual_corridor(inner: np.ndarray, outer: np.ndarray, alphas: n
     penalty += params.smoothness_lambda * path_roughness_penalty(path_pts)
     penalty += params.curvature_lambda * curvature_penalty(path_pts)
     penalty += params.curvature_jerk_lambda * curvature_jerk_penalty(path_pts)
+    # Lateral jerk penalty: a_lat = v^2 * kappa; penalize mean squared delta
+    try:
+        kappa_series = estimate_curvature_series(path_pts)
+        if kappa_series.size == s_arr.size:
+            a_lat = (v_arr * v_arr) * kappa_series
+            if a_lat.size >= 3:
+                da = np.diff(a_lat)
+                penalty += 0.5 * float(np.mean(da * da))
+    except Exception:
+        pass
+    # Adaptive safety margin: additional penalty in high curvature areas
+    try:
+        kappa_abs = np.abs(estimate_curvature_series(path_pts))
+        local_margin = 1.0 - np.clip(kappa_abs * 15.0, 0.0, 0.3)
+        # Penalize low local margins (proxy to require more caution)
+        penalty += 0.02 * float(np.mean((1.0 - local_margin) ** 2))
+    except Exception:
+        pass
     penalty += params.heading_spike_lambda * heading_spike_penalty(path_pts, params.heading_max_delta_rad)
     penalty += params.center_deviation_lambda * float(np.mean((alphas - 0.5) * (alphas - 0.5)))
     # Longitudinal accel/brake over-limit penalties
@@ -391,7 +568,78 @@ def evaluate_individual_corridor(inner: np.ndarray, outer: np.ndarray, alphas: n
             jerk = dads * v_arr
             jerk_norm = jerk / max(denom * 2.0, 1e-6)
             penalty += params.long_jerk_lambda * float(np.mean(jerk_norm * jerk_norm))
-    return t + float(penalty)
+
+    # Steering rate penalty (driver control rate feasibility)
+    try:
+        diffs = np.diff(path_pts, axis=0)
+        headings = np.arctan2(diffs[:, 1], diffs[:, 0])
+        dheading = np.diff(headings)
+        dheading = (dheading + np.pi) % (2 * np.pi) - np.pi
+        seg_lengths = np.linalg.norm(diffs[:-1], axis=1)
+        if v_arr.size >= 3 and seg_lengths.size == dheading.size:
+            avg_v = 0.5 * (v_arr[:-2] + v_arr[1:-1])
+            dt = seg_lengths / np.maximum(avg_v, 1.0)
+            steering_rate = np.abs(dheading) / np.maximum(dt, 1e-3)
+            max_rate_rad = np.deg2rad(180.0)
+            excess = np.clip(steering_rate - max_rate_rad, 0.0, None)
+            penalty += params.steering_rate_lambda * float(np.mean(excess * excess))
+    except Exception:
+        pass
+
+    # Load transfer + load sensitivity (effective mu adjustment proxy)
+    try:
+        kappa_series2 = estimate_curvature_series(path_pts)
+        if kappa_series2.size == v_arr.size:
+            a_lat_series = (v_arr * v_arr) * np.abs(kappa_series2)
+            # Simple CoG and track width constants
+            cog_h = 0.3
+            track_w = 1.5
+            fz_nominal = 0.5 * params.mass_kg * params.gravity
+            delta_fz = params.mass_kg * a_lat_series * cog_h / max(track_w, 1e-3)
+            mu_outer = params.mu_friction * np.power(1.0 + delta_fz / max(fz_nominal, 1e-3), -0.1)
+            mu_inner = params.mu_friction * np.power(np.maximum(1.0 - delta_fz / max(fz_nominal, 1e-3), 1e-3), -0.1)
+            mu_effective = 0.5 * (mu_outer + mu_inner)
+            # Penalize regions where lateral demand exceeds effective grip envelope
+            max_a_lat = mu_effective * params.gravity
+            lat_excess = np.clip(a_lat_series - max_a_lat, 0.0, None)
+            if lat_excess.size > 0:
+                penalty += 0.05 * float(np.mean((lat_excess / np.maximum(max_a_lat, 1e-3)) ** 2))
+    except Exception:
+        pass
+
+    # Curvature constraints and straightness incentives
+    try:
+        kappa_chk = estimate_curvature_series(path_pts)
+        kappa_abs2 = np.abs(kappa_chk)
+        hard_violations = float(np.sum(np.maximum(kappa_abs2 - float(params.max_curvature), 0.0)))
+        if hard_violations > 1e-3:
+            penalty += float(params.curvature_hard_penalty) * hard_violations
+        penalty += float(params.curvature_soft_penalty) * fit_curvature_limit(
+            path_pts, max_kappa=float(params.max_curvature), hardness=float(params.curvature_hardness)
+        )
+        # Straightness reward (negative penalty)
+        # Scale by configured straightness_bonus via multiplier of default 0.3 baseline
+        base_bonus = fit_straight_reward(path_pts, target_kappa=float(params.max_curvature))
+        scale = float(params.straightness_bonus) / 0.3 if 0.3 != 0 else 1.0
+        penalty += scale * base_bonus
+        # Additional alpha smoothness reinforcement
+        penalty += 1.0 * params.offset_smooth_lambda * np.mean(d1 ** 2)
+    except Exception:
+        pass
+    # Weighted fitness
+    time_w = float(getattr(params, "current_time_weight", params.time_weight))
+    pen_w = float(getattr(params, "current_penalty_weight", params.penalty_weight))
+    return time_w * float(t) + pen_w * float(penalty)
+
+
+def _evaluate_with_cache(inner: np.ndarray, outer: np.ndarray, alphas: np.ndarray, params_eval: GAParams, cache_key_extra: Tuple[Any, ...], cache_step: float) -> float:
+    key = (_quantize_array(alphas, cache_step),) + cache_key_extra
+    got = _fitness_cache.get(key)
+    if got is not None:
+        return got
+    fit = evaluate_individual_corridor(inner, outer, alphas, params_eval)
+    _fitness_cache.set(key, fit)
+    return fit
 
 
 def smooth_series_moving_average(values: np.ndarray, repeats: int = 2) -> np.ndarray:
@@ -537,90 +785,298 @@ def run_ga_offset(points: List[Point], params: GAParams) -> Tuple[np.ndarray, np
 
 
 def run_ga_corridor(inner: np.ndarray, outer: np.ndarray, params: GAParams) -> Tuple[np.ndarray, np.ndarray, float]:
-    # Resample corridor to target resolution for robust evaluation
-    t_start = time.perf_counter()
-    inner = resample_polyline_arclength(inner.tolist(), max(inner.shape[0], params.target_samples))
-    outer = resample_polyline_arclength(outer.tolist(), max(outer.shape[0], params.target_samples))
-    print(f"[GA-corridor] Resampled inner/outer to {inner.shape[0]} points (target_samples={params.target_samples})")
-    # Single-resolution: evaluate on full resolution
-    midline = 0.5 * (inner + outer)
-    inner_sel = inner
-    outer_sel = outer
-    n = inner_sel.shape[0]
-    print(f"[GA-corridor] Using full resolution: {n} points")
-    print(f"[GA-corridor] GA config: pop={params.population_size}, gen={params.generations}")
-    pop = [np.clip(0.5 + np.random.normal(0.0, 0.08, size=n).astype(float), 0.0, 1.0) for _ in range(params.population_size)]
-    fitness = [evaluate_individual_corridor(inner_sel, outer_sel, ind, params) for ind in pop]
+    # Timing
+    total_start = time.perf_counter()
 
-    num_elite = max(1, int(params.elite_fraction * params.population_size))
-    best_alphas = pop[int(np.argmin(fitness))].copy()
-    best_time = float(min(fitness))
+    def prepare_sampling(inner_arr: np.ndarray, outer_arr: np.ndarray, target_n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        # Adaptive sampling based on curvature on midline
+        mid = 0.5 * (inner_arr + outer_arr)
+        if target_n <= 0:
+            target_n = mid.shape[0]
+        if params.curvature_sampling_beta > 0.0:
+            inner_rs = resample_polyline_by_curvature(inner_arr.tolist(), max(target_n, 10), beta=params.curvature_sampling_beta)
+            outer_rs = resample_polyline_by_curvature(outer_arr.tolist(), max(target_n, 10), beta=params.curvature_sampling_beta)
+        else:
+            inner_rs = resample_polyline_arclength(inner_arr.tolist(), max(target_n, 10))
+            outer_rs = resample_polyline_arclength(outer_arr.tolist(), max(target_n, 10))
+        mid_rs = 0.5 * (inner_rs + outer_rs)
+        return inner_rs, outer_rs, mid_rs
+
+    # Coarse-to-fine setup
+    fitness_history: List[float] = []
+    best_alphas_full_res: Optional[np.ndarray] = None
+    best_time_overall: float = float("inf")
+
+    stages: List[Tuple[int, float, float]] = []  # (samples, sigma_start, sigma_end)
+    full_target = max(int(params.target_samples), max(inner.shape[0], outer.shape[0]))
+    if params.coarse_to_fine and full_target >= 40:
+        coarse_n = max(10, int(full_target * params.coarse_factor))
+        stages.append((coarse_n, params.mutation_sigma_start * 1.2, params.mutation_sigma_end * 1.2))
+        stages.append((full_target, params.mutation_sigma_start, params.mutation_sigma_end))
+    else:
+        stages.append((full_target, params.mutation_sigma_start, params.mutation_sigma_end))
 
     last_report = -1
-    no_improve = 0
-    for _gen in range(params.generations):
-        elite_idx = np.argsort(fitness)[:num_elite]
-        new_pop: List[np.ndarray] = [pop[i].copy() for i in elite_idx]
-        while len(new_pop) < params.population_size:
-            i1 = tournament_select(pop, fitness, params.tournament_k)
-            i2 = tournament_select(pop, fitness, params.tournament_k)
-            c1, c2 = crossover(pop[i1], pop[i2], params.crossover_rate)
-            sigma_prog = (1.0 - (_gen / max(params.generations - 1, 1))) if params.use_annealing else 1.0
-            sigma = params.mutation_sigma_end + (params.mutation_sigma_start - params.mutation_sigma_end) * sigma_prog
-            if no_improve >= params.stagnation_patience // 2:
-                sigma *= 1.5
-            c1 = mutate(c1, params.mutation_rate, sigma, 1.0)
-            if len(new_pop) < params.population_size:
-                new_pop.append(np.clip(c1, 0.0, 1.0))
-            if len(new_pop) < params.population_size:
-                c2 = mutate(c2, params.mutation_rate, sigma, 1.0)
-                new_pop.append(np.clip(c2, 0.0, 1.0))
-        pop = new_pop
-        fitness = [evaluate_individual_corridor(inner_sel, outer_sel, ind, params) for ind in pop]
-        gen_best_idx = int(np.argmin(fitness))
-        gen_best = pop[gen_best_idx]
-        gen_best_fit = float(fitness[gen_best_idx])
-        if gen_best_fit < best_time - 1e-6:
-            best_time = gen_best_fit
-            best_alphas = gen_best.copy()
-            no_improve = 0
+    for stage_idx, (target_n, sigma_start, sigma_end) in enumerate(stages):
+        t_stage = time.perf_counter()
+        inner_rs, outer_rs, midline = prepare_sampling(inner, outer, target_n)
+        n = inner_rs.shape[0]
+        print(f"[GA-corridor] Stage {stage_idx+1}/{len(stages)}: samples={n}")
+
+        # Initialization
+        rng = np.random.default_rng()
+        if best_alphas_full_res is not None:
+            # Project previous best to current resolution
+            sel_s_prev = np.linspace(0.0, 1.0, best_alphas_full_res.size)
+            sel_s_curr = np.linspace(0.0, 1.0, n)
+            init_center = np.clip(np.interp(sel_s_curr, sel_s_prev, best_alphas_full_res), 0.0, 1.0)
         else:
-            no_improve += 1
+            init_center = np.full((n,), 0.5, dtype=float)
+        pop = [np.clip(init_center + rng.normal(0.0, 0.08, size=n).astype(float), 0.0, 1.0) for _ in range(params.population_size)]
 
-        # Random immigrants
-        if params.immigrants_fraction > 0.0:
-            num_imm = int(params.immigrants_fraction * params.population_size)
-            if num_imm > 0:
-                worst_idx = np.argsort(fitness)[-num_imm:]
-                for wi in worst_idx:
-                    pop[wi] = np.clip(np.random.uniform(0.2, 0.8, size=n).astype(float), 0.0, 1.0)
-                    fitness[wi] = evaluate_individual_corridor(inner_sel, outer_sel, pop[wi], params)
-        if _gen % 10 == 0 and _gen != last_report:
-            last_report = _gen
-            mean_fit = float(np.mean(fitness))
-            std_fit = float(np.std(fitness))
-            print(f"[GA-corridor] gen={_gen:4d} best_time={best_time:.4f}  mean={mean_fit:.4f}  std={std_fit:.4f}  no_improve={no_improve}")
+        # Diversity helpers
+        def population_diversity(pop_arr: List[np.ndarray]) -> float:
+            if len(pop_arr) == 0:
+                return 0.0
+            mat = np.stack(pop_arr, axis=0)
+            return float(np.mean(np.std(mat, axis=0)))
 
-        if no_improve >= params.stagnation_patience:
-            base_pop_size = params.population_size - num_elite
-            new_pop = [pop[i].copy() for i in elite_idx]
-            new_pop.extend([np.clip(np.random.uniform(0.2, 0.8, size=n).astype(float), 0.0, 1.0) for _ in range(max(0, base_pop_size))])
-            pop = new_pop[:params.population_size]
-            fitness = [evaluate_individual_corridor(inner_sel, outer_sel, ind, params) for ind in pop]
-            no_improve = 0
-            print("[GA-corridor] Restart triggered (stagnation)")
+        # Curvature for mutation scaling (lower sigma in turns)
+        kappa = np.abs(estimate_curvature_series(midline))
+        if np.max(kappa) > 0:
+            kappa_norm = kappa / np.max(kappa)
+        else:
+            kappa_norm = kappa
+        curvature_sigma_scale = 0.6 + 0.4 * (1.0 - kappa_norm)  # 0.6 in turns -> 1.0 on straights
 
-    # Interpolate alphas back to full resolution using arc-length along selection
-    sel_s = np.linspace(0.0, 1.0, n)
-    full_s = np.linspace(0.0, 1.0, midline.shape[0])
-    best_alphas_full = np.clip(np.interp(full_s, sel_s, best_alphas), 0.0, 1.0)
-    # Smooth alphas (stays within corridor after clamping) for realistic curvature continuity
-    best_alphas_full = np.clip(smooth_series_moving_average(best_alphas_full, repeats=1), 0.0, 1.0)
+        num_elite = max(1, int(params.elite_fraction * params.population_size))
+
+        # Fitness function with adaptive penalties over generations (apply via param copy)
+        def params_for_gen(gen_idx: int) -> GAParams:
+            if params.adaptive_penalty_decay <= 0.0 or len(stages) == 0:
+                return params
+            prog = gen_idx / max(params.generations - 1, 1)
+            decay = (1.0 - prog) * params.adaptive_penalty_decay + (1.0 - params.adaptive_penalty_decay)
+            # Adaptive time/penalty weights
+            if params.adaptive_time_weight:
+                # Increase time weight over generations, keep penalty weight decaying
+                time_w = params.time_weight * (0.5 + 0.5 * prog)
+                pen_w = params.penalty_weight * decay
+            else:
+                time_w = params.time_weight
+                pen_w = params.penalty_weight
+            return replace(
+                params,
+                mutation_sigma_start=sigma_start,
+                mutation_sigma_end=sigma_end,
+                smoothness_lambda=params.smoothness_lambda * decay,
+                offset_smooth_lambda=params.offset_smooth_lambda * decay,
+                curvature_lambda=params.curvature_lambda * decay,
+                curvature_jerk_lambda=params.curvature_jerk_lambda * decay,
+                heading_spike_lambda=params.heading_spike_lambda * decay,
+                center_deviation_lambda=params.center_deviation_lambda * decay,
+                long_accel_lambda=params.long_accel_lambda * decay,
+                long_jerk_lambda=params.long_jerk_lambda * decay,
+                current_time_weight=time_w,
+                current_penalty_weight=pen_w,
+            )
+
+        # Initial fitness
+        cache_extra_key = (
+            params.mass_kg, params.mu_friction, params.cL_downforce, params.cD_drag,
+            params.a_brake_max, params.a_accel_cap, params.safety_speed_margin,
+        )
+        # Smart initialization: heuristic + random
+        kappa0 = np.abs(estimate_curvature_series(midline))
+        base_alphas = np.where(kappa0 > 0.05, 0.3, 0.5)
+        pop = []
+        heuristic_n = params.population_size // 3
+        for _ in range(heuristic_n):
+            pop.append(np.clip(base_alphas + rng.normal(0.0, 0.05, size=n), 0.0, 1.0))
+        for _ in range(params.population_size - len(pop)):
+            pop.append(rng.uniform(0.2, 0.8, size=n).astype(float))
+
+        if params.enable_parallel and params.parallel_workers > 1:
+            with ProcessPoolExecutor(max_workers=params.parallel_workers) as ex:
+                futures = [ex.submit(_evaluate_with_cache, inner_rs, outer_rs, ind, params_for_gen(0), cache_extra_key, params.cache_granularity) for ind in pop]
+                fitness = [f.result() for f in futures]
+        else:
+            fitness = [_evaluate_with_cache(inner_rs, outer_rs, ind, params_for_gen(0), cache_extra_key, params.cache_granularity) for ind in pop]
+
+        best_idx = int(np.argmin(fitness))
+        best_alphas = pop[best_idx].copy()
+        best_time = float(fitness[best_idx])
+        no_improve = 0
+
+        gen_start_time = time.perf_counter()
+        for _gen in range(params.generations):
+            # Elitism
+            elite_idx = np.argsort(fitness)[:num_elite]
+            new_pop: List[np.ndarray] = [pop[i].copy() for i in elite_idx]
+
+            # Adaptive mutation sigma: annealing + diversity control
+            sigma_prog = (1.0 - (_gen / max(params.generations - 1, 1))) if params.use_annealing else 1.0
+            base_sigma = sigma_end + (sigma_start - sigma_end) * sigma_prog
+            diversity = population_diversity(pop)
+            if params.diversity_target > 0.0:
+                # Increase sigma if diversity low, decrease if high
+                base_sigma *= np.clip(params.diversity_target / max(diversity, 1e-6), 0.5, 2.0)
+            if no_improve >= params.stagnation_patience // 2:
+                base_sigma *= 1.5
+
+            # Dynamic population sizing
+            if getattr(params, "use_dynamic_population", False):
+                div_now = diversity
+                target_size = compute_adaptive_population_size(_gen, params.generations, params.population_size, div_now, params.diversity_target, params.population_min_ratio, params.population_max_ratio)
+                if target_size != len(pop):
+                    print(f"[GA] Adjusting population: {len(pop)} -> {target_size} (diversity={div_now:.4f})")
+                    pop, fitness = adjust_population_size(pop, fitness, target_size, rng)
+                    # Recompute elite after resize
+                    elite_idx = np.argsort(fitness)[:max(1, int(params.elite_fraction * len(pop)))]
+                    new_pop = [pop[i].copy() for i in elite_idx]
+
+            # Vectorized breeding
+            need = len(pop) - len(new_pop)
+            if need > 0:
+                fitness_arr = np.asarray(fitness, dtype=float)
+                # select pairs
+                idx_a = vectorized_tournament_select(fitness_arr, params.tournament_k, need, rng)
+                idx_b = vectorized_tournament_select(fitness_arr, params.tournament_k, need, rng)
+                parents_a = np.stack([pop[i] for i in idx_a], axis=0)
+                parents_b = np.stack([pop[i] for i in idx_b], axis=0)
+                if params.use_adaptive_crossover:
+                    fitness_a = fitness_arr[idx_a]
+                    fitness_b = fitness_arr[idx_b]
+                    offspring = adaptive_crossover_weighted(parents_a, parents_b, fitness_a, fitness_b, params.crossover_rate, rng)
+                else:
+                    offspring = uniform_crossover(parents_a, parents_b, params.crossover_rate, rng)
+                # Curvature-biased per-gene sigma
+                per_gene_sigma = base_sigma * curvature_sigma_scale
+                offspring = gaussian_mutation(offspring, per_gene_sigma, rng)
+                # Append to population list
+                new_pop.extend([offspring[i].astype(float) for i in range(offspring.shape[0])])
+
+            pop = new_pop
+
+            # Evaluate fitness (parallel, cached) with adaptive penalties at this generation
+            params_eval = params_for_gen(_gen)
+            cache_extra_key_gen = (
+                params_eval.smoothness_lambda,
+                params_eval.offset_smooth_lambda,
+                params_eval.curvature_lambda,
+                params_eval.curvature_jerk_lambda,
+                params_eval.heading_spike_lambda,
+                params_eval.center_deviation_lambda,
+                params_eval.long_accel_lambda,
+                params_eval.long_jerk_lambda,
+            ) + cache_extra_key
+
+            if params.enable_parallel and params.parallel_workers > 1:
+                with ProcessPoolExecutor(max_workers=params.parallel_workers) as ex:
+                    futures = [ex.submit(_evaluate_with_cache, inner_rs, outer_rs, ind, params_eval, cache_extra_key_gen, params.cache_granularity) for ind in pop]
+                    fitness = [f.result() for f in futures]
+            else:
+                fitness = [_evaluate_with_cache(inner_rs, outer_rs, ind, params_eval, cache_extra_key_gen, params.cache_granularity) for ind in pop]
+
+            # Optional logging of time vs penalty ratio on current best individual
+            try:
+                best_idx_dbg = int(np.argmin(fitness))
+                best_alphas_dbg = pop[best_idx_dbg]
+                path_dbg = build_path_from_corridor(inner_rs, outer_rs, best_alphas_dbg, params_eval)
+                t_dbg, _, _, _ = compute_time_and_dynamics(path_dbg, params_eval)
+                # Recompute penalties only (approx): reuse evaluate but subtract weighted time
+                fit_dbg = evaluate_individual_corridor(inner_rs, outer_rs, best_alphas_dbg, params_eval)
+                time_w_dbg = float(getattr(params_eval, "current_time_weight", params_eval.time_weight))
+                pen_w_dbg = float(getattr(params_eval, "current_penalty_weight", params_eval.penalty_weight))
+                penalty_dbg = max(fit_dbg - time_w_dbg * float(t_dbg), 0.0) / max(pen_w_dbg, 1e-6)
+                ratio = penalty_dbg / max(float(t_dbg), 1e-6)
+                print(f"[GA] gen={_gen} time={t_dbg:.3f}s penalty={penalty_dbg:.3f} ratio={ratio:.2f}")
+            except Exception:
+                pass
+
+            # Fitness sharing (niching) to encourage diversity
+            try:
+                sigma_share = 0.1
+                penalty_factor = 0.3
+                pop_mat = np.stack(pop, axis=0)
+                # Pairwise distances (approximate using subset for speed if large)
+                if pop_mat.shape[0] <= 256:
+                    dists = np.linalg.norm(pop_mat[:, None, :] - pop_mat[None, :, :], axis=2)
+                    niche_counts = np.clip(1.0 - dists / sigma_share, 0.0, None)
+                    # zero self
+                    np.fill_diagonal(niche_counts, 0.0)
+                    sharing = 1.0 + penalty_factor * np.sum(niche_counts, axis=1)
+                    fitness = (np.asarray(fitness) * sharing).tolist()
+            except Exception:
+                pass
+
+            gen_best_idx = int(np.argmin(fitness))
+            gen_best = pop[gen_best_idx]
+            gen_best_fit = float(fitness[gen_best_idx])
+            fitness_history.append(gen_best_fit)
+
+            improved = False
+            if gen_best_fit < best_time - 1e-9:
+                best_time = gen_best_fit
+                best_alphas = gen_best.copy()
+                no_improve = 0
+                improved = True
+            else:
+                no_improve += 1
+
+            # Random immigrants to maintain diversity
+            if params.immigrants_fraction > 0.0:
+                num_imm = int(params.immigrants_fraction * params.population_size)
+                if num_imm > 0:
+                    worst_idx = np.argsort(fitness)[-num_imm:]
+                    for wi in worst_idx:
+                        pop[wi] = np.clip(rng.uniform(0.2, 0.8, size=n).astype(float), 0.0, 1.0)
+                        fitness[wi] = _evaluate_with_cache(inner_rs, outer_rs, pop[wi], params_eval, cache_extra_key_gen, params.cache_granularity)
+
+            # Logging
+            if _gen % 10 == 0 and _gen != last_report:
+                last_report = _gen
+                mean_fit = float(np.mean(fitness))
+                std_fit = float(np.std(fitness))
+                elapsed_gen = time.perf_counter() - gen_start_time
+                gen_start_time = time.perf_counter()
+                print(f"[GA-corridor] stage={stage_idx+1} gen={_gen:4d} best={best_time:.4f} mean={mean_fit:.4f} std={std_fit:.4f} div={diversity:.4f} dt={elapsed_gen:.2f}s imp={'Y' if improved else 'N'} no_imp={no_improve}")
+
+            # Early stopping
+            if no_improve >= params.stagnation_patience:
+                print("[GA-corridor] Early stopping (stagnation)")
+                break
+
+        # Stage result -> project to full resolution baseline for next stage
+        sel_s = np.linspace(0.0, 1.0, n)
+        if best_alphas is None or best_alphas.size == 0:
+            best_alphas = np.full((n,), 0.5, dtype=float)
+        best_alphas_full_res = np.clip(np.interp(np.linspace(0.0, 1.0, full_target), sel_s, best_alphas), 0.0, 1.0)
+        best_time_overall = min(best_time_overall, best_time)
+        print(f"[GA-corridor] Stage {stage_idx+1} done in {time.perf_counter()-t_stage:.2f}s best={best_time:.4f}")
+
+    # Final smoothing and path construction at full resolution
+    inner_final, outer_final, mid_final = prepare_sampling(inner, outer, full_target)
+    best_alphas_full = np.clip(smooth_series_moving_average(best_alphas_full_res, repeats=1), 0.0, 1.0)
+    # Post-process to enforce straightness and rate limit
+    print(f"[GA-corridor] Pre-processing: straightening best solution...")
+    best_alphas_full = fit_force_straight(best_alphas_full, max_change=float(params.alpha_post_max_change))
+    best_alphas_full = fit_force_straight(best_alphas_full, max_change=max(0.001, float(params.alpha_post_max_change) * 0.6))
     best_alphas_full = np.clip(limit_series_rate(best_alphas_full, params.alpha_delta_max), 0.0, 1.0)
-    best_path = build_path_from_corridor(inner, outer, best_alphas_full)
-    dt = time.perf_counter() - t_start
-    print(f"[GA-corridor] Done. best_time={best_time:.4f}  duration={dt:.2f}s")
-    return best_alphas, best_path, best_time
+    best_path = build_path_from_corridor(inner_final, outer_final, best_alphas_full)
+    # Curvature validation report
+    try:
+        num_viol, max_kappa_val = fit_count_curv_viol(best_path, max_kappa=float(params.max_curvature))
+        print(f"[GA-corridor] Final curvature check: violations={num_viol}, max_κ={max_kappa_val:.4f}")
+        if num_viol > 0:
+            print(f"[GA-corridor] WARNING: {num_viol} points still violate κ > {float(params.max_curvature):.4f}!")
+        else:
+            print(f"[GA-corridor] SUCCESS: All points have κ ≤ {float(params.max_curvature):.4f}")
+    except Exception:
+        pass
+    dt_total = time.perf_counter() - total_start
+    print(f"[GA-corridor] Done. best_time={best_time_overall:.4f} duration={dt_total:.2f}s")
+    return best_alphas_full_res, best_path, best_time_overall, fitness_history
 
 
 def main():
@@ -629,7 +1085,7 @@ def main():
     parser = argparse.ArgumentParser(description="GA optimizer for Turn_1.csv")
     parser.add_argument("--turns-dir", type=str, default=None, help="Base 'Turns' directory (defaults to firmware/Turns)")
     # Offset mode removed; no max-offset
-    parser.add_argument("--pop", type=int, default=160, help="Population size")
+    parser.add_argument("--pop", type=int, default=100, help="Population size")
     parser.add_argument("--gen", type=int, default=400, help="Generations")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     # Single-resolution (no coarse/refine, no straights-only)
@@ -745,7 +1201,11 @@ def main():
     else:
         print("[main] Mode: offset from centerline")
     if use_corridor and inner_edge is not None and outer_edge is not None:
-        _, best_path, best_fit = run_ga_corridor(inner_edge, outer_edge, params)
+        _ret = run_ga_corridor(inner_edge, outer_edge, params)
+        if isinstance(_ret, tuple) and len(_ret) == 3:
+            _, best_path, best_fit = _ret
+        else:
+            _, best_path, best_fit, _fitness_history = _ret
     else:
         _, best_path, best_fit = run_ga_offset(points, params)
 
