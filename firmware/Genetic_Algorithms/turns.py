@@ -92,7 +92,7 @@ class GAParams:
     long_jerk_lambda: float = 0.0002
     # Single-resolution GA (no coarse/refine stages)
     # Smoothness hardening (limit kinks)
-    alpha_delta_max: float = 0.15  # max change between consecutive alphas
+    alpha_delta_max: float = 0.08  # max change between consecutive alphas
     alpha_rate_lambda: float = 1.0
     heading_max_delta_rad: float = 0.35  # ~20 degrees per segment
     heading_spike_lambda: float = 0.01
@@ -110,7 +110,7 @@ class GAParams:
     c_rr: float = 0.004
     safety_speed_margin: float = 1.00
     brake_power_watts: float = 1200000.0
-    target_samples: int = 300
+    target_samples: int = 500
     # Adaptation and diversity controls
     use_annealing: bool = True
     mutation_sigma_start: float = 0.25
@@ -134,7 +134,7 @@ class GAParams:
     # Steering rate penalty weight
     steering_rate_lambda: float = 0.3
     # Curvature constraint tuning
-    max_curvature: float = 0.02
+    max_curvature: float = 0.015
     curvature_hardness: float = 30.0
     curvature_hard_penalty: float = 100.0
     curvature_soft_penalty: float = 5.0
@@ -143,19 +143,19 @@ class GAParams:
     # Adaptive crossover and B-spline controls
     use_adaptive_crossover: bool = True
     use_bspline: bool = True
-    bspline_smoothing: float = 0.0
+    bspline_smoothing: float = 0.01
     bspline_degree: int = 3
     # Dynamic population sizing
     use_dynamic_population: bool = True
     population_min_ratio: float = 0.5
     population_max_ratio: float = 1.5
     # Weighted fitness controls
-    time_weight: float = 800.0
-    penalty_weight: float = 1.0
+    time_weight: float = 1000.0
+    penalty_weight: float = 0.5
     adaptive_time_weight: bool = True
     # Internal per-generation weights (set in params_for_gen)
-    current_time_weight: float = 1.0
-    current_penalty_weight: float = 1.0
+    current_time_weight: float = 1000.0
+    current_penalty_weight: float = 0.5
 
 
 # In-memory cache for fitness evaluations (alpha vectors -> fitness), keyed by quantized tuple
@@ -745,6 +745,47 @@ def run_ga_offset(points: List[Point], params: GAParams) -> Tuple[np.ndarray, np
     print(f"[GA-offset] Done. best_time={best_time:.4f}  duration={dt:.2f}s")
     return best_offsets, best_path, best_time
 
+def create_racing_line_initialization(inner: np.ndarray, outer: np.ndarray, apex_fraction: float = 0.5) -> np.ndarray:
+    """
+    Създава класическа racing line: външно-вътрешно-външно
+    
+    Args:
+        inner: вътрешна граница на коридора
+        outer: външна граница на коридора
+        apex_fraction: къде е апексът (0.5 = средата на завоя)
+    
+    Returns:
+        alphas: коефициенти за всяка точка (0=вътре, 1=външно)
+    """
+    n = inner.shape[0]
+    
+    # Намери апекса (точката с най-голяма кривина)
+    midline = 0.5 * (inner + outer)
+    kappa = np.abs(estimate_curvature_series(midline))
+    apex_idx = int(np.argmax(kappa))
+    
+    # Или използвай фиксиран процент:
+    # apex_idx = int(n * apex_fraction)
+    
+    alphas = np.zeros(n)
+    
+    # Вход: плавен преход от външно (1.0) към апекс
+    entry_length = apex_idx
+    if entry_length > 0:
+        alphas[:apex_idx] = np.linspace(0.95, 0.05, entry_length)  # 0.95=външно, 0.05=вътрешно
+    
+    # Апекс: най-вътрешна точка
+    alphas[apex_idx] = 0.0
+    
+    # Изход: плавен преход от апекс към външно
+    exit_length = n - apex_idx - 1
+    if exit_length > 0:
+        alphas[apex_idx+1:] = np.linspace(0.05, 0.95, exit_length)
+    
+    # Изгладяване за плавност
+    alphas = smooth_series_moving_average(alphas, repeats=3)
+    
+    return np.clip(alphas, 0.0, 1.0)
 
 def run_ga_corridor(inner: np.ndarray, outer: np.ndarray, params: GAParams) -> Tuple[np.ndarray, np.ndarray, float]:
     # Timing
@@ -785,7 +826,7 @@ def run_ga_corridor(inner: np.ndarray, outer: np.ndarray, params: GAParams) -> T
         n = inner_rs.shape[0]
         print(f"[GA-corridor] Stage {stage_idx+1}/{len(stages)}: samples={n}")
 
-        # Initialization
+        # Initialization with racing line
         rng = np.random.default_rng()
         if best_alphas_full_res is not None:
             # Project previous best to current resolution
@@ -793,8 +834,22 @@ def run_ga_corridor(inner: np.ndarray, outer: np.ndarray, params: GAParams) -> T
             sel_s_curr = np.linspace(0.0, 1.0, n)
             init_center = np.clip(np.interp(sel_s_curr, sel_s_prev, best_alphas_full_res), 0.0, 1.0)
         else:
-            init_center = np.full((n,), 0.5, dtype=float)
-        pop = [np.clip(init_center + rng.normal(0.0, 0.08, size=n).astype(float), 0.0, 1.0) for _ in range(params.population_size)]
+            # Създай racing line като начална точка
+            init_center = create_racing_line_initialization(inner_rs, outer_rs, apex_fraction=0.5)
+            print(f"[GA-corridor] Initialized with racing line (apex detection)")
+
+        racing_line_count = params.population_size // 2
+        pop = []
+
+        # Racing line вариации (малки отклонения)
+        for _ in range(racing_line_count):
+            pop.append(np.clip(init_center + rng.normal(0.0, 0.03, size=n), 0.0, 1.0))
+
+        # Diverse exploration (по-големи отклонения)
+        for _ in range(params.population_size - racing_line_count):
+            pop.append(np.clip(init_center + rng.normal(0.0, 0.15, size=n), 0.0, 1.0))
+
+        print(f"[GA-corridor] Population: {racing_line_count} near racing line, {params.population_size - racing_line_count} diverse")
 
         # Diversity helpers
         def population_diversity(pop_arr: List[np.ndarray]) -> float:
@@ -1181,6 +1236,33 @@ def main():
     out_dir = os.path.dirname(turn_csv)
     out_path = os.path.join(out_dir, "Turn_1_best.csv")
     write_points_csv(out_path, best_compact.tolist())
+    # След write_points_csv(out_path, best_compact.tolist())
+
+    # Анализ на резултата
+    print("\n=== RACE LINE ANALYSIS ===")
+    try:
+        # Проверка на кривина
+        kappa_final = estimate_curvature_series(best_path)
+        print(f"Max curvature: {np.max(np.abs(kappa_final)):.6f}")
+        print(f"Mean curvature: {np.mean(np.abs(kappa_final)):.6f}")
+        
+        # Проверка на скорост
+        vp = VehicleParams(
+            mass_kg=params.mass_kg, mu_friction=params.mu_friction,
+            cL_downforce=params.cL_downforce, engine_power_watts=params.engine_power_watts,
+            # ... останалите параметри
+        )
+        s, _, _, v = speed_profile(best_path.tolist(), vp)
+        print(f"Min speed: {np.min(v):.2f} m/s ({np.min(v)*3.6:.1f} km/h)")
+        print(f"Max speed: {np.max(v):.2f} m/s ({np.max(v)*3.6:.1f} km/h)")
+        print(f"Avg speed: {np.mean(v):.2f} m/s ({np.mean(v)*3.6:.1f} km/h)")
+        
+        # Намери апекса
+        apex_idx = np.argmax(np.abs(kappa_final))
+        print(f"Apex at point {apex_idx}/{len(best_path)} (speed: {v[apex_idx]*3.6:.1f} km/h)")
+        
+    except Exception as e:
+        print(f"Analysis error: {e}")
     print(f"Wrote best path: {out_path}")
 
 
