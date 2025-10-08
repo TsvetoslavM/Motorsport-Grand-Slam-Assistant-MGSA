@@ -1,0 +1,27 @@
+Добави и from casadi import sqrt, vertcat
+
+# Коефициент на сцепление (dry asphalt)
+mu = 1.2  
+
+# Вертикални сили (приблизително разпределение по оси)
+Fzf = m * g * (b / (a + b))
+Fzr = m * g * (a / (a + b))
+
+# Сили от Pacejka модел
+Fyf = pacejka_lateral_force(Bf, Cf, Df, alpha_f)
+Fyr = pacejka_lateral_force(Br, Cr, Dr, alpha_r)
+
+# Ограничение за сцепление (т.нар. "friction ellipse")
+# sqrt(Fx^2 + Fy^2) ≤ μ * Fz
+constraints = []
+
+# Предна ос
+constraints.append(sqrt(Fxf**2 + Fyf**2) - mu * Fzf)
+# Задна ос
+constraints.append(sqrt(Fxr**2 + Fyr**2) - mu * Fzr)
+
+# Добави тези ограничения към оптимизационния проблем
+for c in constraints:
+    opti.subject_to(c <= 0)
+
+и да използва комбинирана "friction ellipse" с динамично намаляване на страничната сила при прилагане на надлъжна (Fx) — реалистично за ускоряване/спиране в завой
