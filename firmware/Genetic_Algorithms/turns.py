@@ -30,7 +30,6 @@ from .fitness import (
     count_curvature_violations as fit_count_curv_viol,
 )
 from .population import compute_adaptive_population_size, adjust_population_size
-
 # Named constants
 EPSILON = 1e-9
 MIN_POINTS_FOR_CURVATURE = 3
@@ -110,7 +109,7 @@ class GAParams:
     c_rr: float = 0.004
     safety_speed_margin: float = 1.00
     brake_power_watts: float = 1200000.0
-    target_samples: int = 500
+    target_samples: int = 400
     # Adaptation and diversity controls
     use_annealing: bool = True
     mutation_sigma_start: float = 0.25
@@ -146,7 +145,7 @@ class GAParams:
     bspline_smoothing: float = 0.01
     bspline_degree: int = 3
     # Dynamic population sizing
-    use_dynamic_population: bool = True
+    use_dynamic_population: bool = False
     population_min_ratio: float = 0.5
     population_max_ratio: float = 1.5
     # Weighted fitness controls
@@ -325,16 +324,42 @@ def chaikin_smooth(path_pts: np.ndarray, iterations: int = 2) -> np.ndarray:
 
 
 def estimate_curvature_series(pts: np.ndarray) -> np.ndarray:
+    """Оценява кривината, избягва division by zero"""
     if pts.shape[0] < 3:
         return np.zeros((pts.shape[0],), dtype=float)
+    
     d1 = np.diff(pts, axis=0)
+    
+    # SAFEGUARD: Провери за нулеви разстояния
+    norms = np.linalg.norm(d1, axis=1)
+    if np.any(norms < 1e-6):
+        # Има дублирани или почти идентични точки
+        print(f"[WARNING] Found {np.sum(norms < 1e-6)} near-duplicate points in curvature calculation")
+        # Филтрирай точките преди изчисление
+        valid_mask = np.concatenate([[True], norms >= 1e-6, [True]])
+        pts_filtered = pts[valid_mask]
+        if pts_filtered.shape[0] < 3:
+            return np.zeros((pts.shape[0],), dtype=float)
+        return estimate_curvature_series(pts_filtered)  # Рекурсивно с филтрирани точки
+    
     d2 = np.diff(d1, axis=0)
+    
     # Tangent and its rate of change
-    t = d1 / (np.linalg.norm(d1, axis=1, keepdims=True) + 1e-9)
-    dt = d2 / (np.linalg.norm(d1[1:], axis=1, keepdims=True) + 1e-9)
+    t = d1 / (norms[:, None] + 1e-9)
+    
+    # Safeguard за norms[1:]
+    norms2 = norms[1:]
+    norms2 = np.maximum(norms2, 1e-9)  # Избягвай division by zero
+    
+    dt = d2 / (norms2[:, None] + 1e-9)
+    
     # Curvature magnitude approximation via |dt/ds|
     kappa = np.zeros((pts.shape[0],), dtype=float)
     kappa[1:-1] = np.linalg.norm(dt, axis=1)
+    
+    # Clamp extreme values
+    kappa = np.clip(kappa, -10.0, 10.0)
+    
     return kappa
 
 
@@ -420,10 +445,10 @@ def estimate_time_seconds(path_pts: np.ndarray, params: GAParams) -> float:
     return compute_lap_time_seconds(s, v)
 
 
-def compute_time_and_dynamics(path_pts: np.ndarray, params: GAParams) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
-    """Return (lap_time, s, v, a_long) where a_long is signed longitudinal accel along s.
-
-    This lets us compute physically realistic penalties (over-accel/brake and jerk).
+def compute_time_and_dynamics(path_pts: np.ndarray, params: GAParams, is_closed: bool = False) -> tuple:
+    """
+    Args:
+        is_closed: True ако е затворена писта, False ако е сегмент
     """
     vp = VehicleParams(
         mass_kg=params.mass_kg,
@@ -440,7 +465,30 @@ def compute_time_and_dynamics(path_pts: np.ndarray, params: GAParams) -> tuple[f
         safety_speed_margin=params.safety_speed_margin,
         brake_power_watts=params.brake_power_watts,
     )
-    s, _kappa, _v_lat, v = speed_profile(path_pts.tolist(), vp)
+    
+    if not is_closed:
+        # За отворен сегмент: добави dummy точки за затваряне
+        # (само за speed profile computation)
+        closing_vec = path_pts[0] - path_pts[-1]
+        closing_dist = np.linalg.norm(closing_vec)
+        
+        if closing_dist > 10.0:  # Ако е отворен
+            # Добави проста връзка за затваряне
+            n_close = max(5, int(closing_dist / 5.0))
+            closing_pts = np.linspace(path_pts[-1], path_pts[0], n_close)
+            path_closed = np.vstack([path_pts, closing_pts])
+        else:
+            path_closed = path_pts
+    else:
+        path_closed = path_pts
+    
+    s, _kappa, _v_lat, v = speed_profile(path_closed.tolist(), vp)
+    
+    # Ако не е затворен, игнорирай dummy частта
+    if not is_closed and len(path_pts) < len(path_closed):
+        s = s[:len(path_pts)]
+        v = v[:len(path_pts)]
+    
     lap_t = compute_lap_time_seconds(s, v)
     s_arr = np.asarray(s, dtype=float)
     v_arr = np.asarray(v, dtype=float)
@@ -451,6 +499,77 @@ def compute_time_and_dynamics(path_pts: np.ndarray, params: GAParams) -> tuple[f
         a_long = np.zeros_like(v_arr)
     return lap_t, s_arr, v_arr, a_long
 
+def close_corridor_segment(inner: np.ndarray, outer: np.ndarray, extension_factor: float = 0.20) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Затваря коридор сегмент с удължения преди/след.
+    Избягва дублирани точки които причиняват division by zero.
+    """
+    n = inner.shape[0]
+    ext_len = max(10, int(n * extension_factor))
+    
+    # === ВХОД: добави права преди началото ===
+    entry_dir_inner = (inner[1] - inner[0])
+    entry_dir_inner = entry_dir_inner / (np.linalg.norm(entry_dir_inner) + 1e-9)
+    entry_dir_outer = (outer[1] - outer[0])
+    entry_dir_outer = entry_dir_outer / (np.linalg.norm(entry_dir_outer) + 1e-9)
+    
+    # ВАЖНО: Еднакво разстояние между точките (избягвай дублиране)
+    step_size = 5.0  # 5 метра между точките
+    
+    entry_inner = []
+    entry_outer = []
+    for i in range(ext_len, 0, -1):
+        dist = i * step_size
+        p_inner = inner[0] - entry_dir_inner * dist
+        p_outer = outer[0] - entry_dir_outer * dist
+        entry_inner.append(p_inner)
+        entry_outer.append(p_outer)
+    
+    entry_inner = np.array(entry_inner)
+    entry_outer = np.array(entry_outer)
+    
+    # === ИЗХОД: добави права след края ===
+    exit_dir_inner = (inner[-1] - inner[-2])
+    exit_dir_inner = exit_dir_inner / (np.linalg.norm(exit_dir_inner) + 1e-9)
+    exit_dir_outer = (outer[-1] - outer[-2])
+    exit_dir_outer = exit_dir_outer / (np.linalg.norm(exit_dir_outer) + 1e-9)
+    
+    exit_inner = []
+    exit_outer = []
+    for i in range(1, ext_len + 1):
+        dist = i * step_size
+        p_inner = inner[-1] + exit_dir_inner * dist
+        p_outer = outer[-1] + exit_dir_outer * dist
+        exit_inner.append(p_inner)
+        exit_outer.append(p_outer)
+    
+    exit_inner = np.array(exit_inner)
+    exit_outer = np.array(exit_outer)
+    
+    # === КОМБИНИРАЙ ===
+    extended_inner = np.vstack([entry_inner, inner, exit_inner])
+    extended_outer = np.vstack([entry_outer, outer, exit_outer])
+    
+    # === DE-DUPLICATE: Премахни твърде близки точки ===
+    def remove_duplicates(pts: np.ndarray, min_dist: float = 0.5) -> np.ndarray:
+        """Премахва точки които са по-близо от min_dist"""
+        if pts.shape[0] < 2:
+            return pts
+        
+        keep = [0]  # Винаги запази първата точка
+        for i in range(1, pts.shape[0]):
+            dist = np.linalg.norm(pts[i] - pts[keep[-1]])
+            if dist >= min_dist:
+                keep.append(i)
+        
+        return pts[keep]
+    
+    extended_inner = remove_duplicates(extended_inner, min_dist=1.0)
+    extended_outer = remove_duplicates(extended_outer, min_dist=1.0)
+    
+    print(f"[close_corridor] After de-duplication: inner={extended_inner.shape[0]}, outer={extended_outer.shape[0]} points")
+    
+    return extended_inner, extended_outer
 
 def offsets_smoothness_penalty(offsets: np.ndarray) -> float:
     # Penalize large offset changes to keep feasible smooth line
@@ -517,13 +636,17 @@ def evaluate_individual_corridor(inner: np.ndarray, outer: np.ndarray, alphas: n
     alphas = np.clip(alphas, 0.0, 1.0)
     path_pts = build_path_from_corridor(inner, outer, alphas, params)
     t, s_arr, v_arr, a_long = compute_time_and_dynamics(path_pts, params)
-    # Death penalty for hard curvature constraint (20% tolerance)
-    try:
-        kappa_abs_hard = np.abs(estimate_curvature_series(path_pts))
-        if kappa_abs_hard.size > 0 and float(np.max(kappa_abs_hard)) > float(params.max_curvature) * 1.2:
-            return 1e9
-    except Exception:
-        pass
+    
+    # === БЕЗ DEATH PENALTY - само градуално наказание ===
+    # Проверка на кривина (без instant failure)
+    kappa_abs = np.abs(estimate_curvature_series(path_pts))
+    if kappa_abs.size > 0:
+        max_kappa = float(np.max(kappa_abs))
+        # Градуално квадратично наказание
+        if max_kappa > float(params.max_curvature):
+            curvature_excess = (max_kappa / float(params.max_curvature) - 1.0)
+            # Мек penalty пропорционален на превишаването
+            t = t * (1.0 + 50.0 * curvature_excess ** 2)
     # Smooth alpha variation to avoid zig-zag
     d1 = np.diff(alphas)
     d2 = np.diff(alphas, n=2) if len(alphas) > 2 else np.array([0.0])
@@ -651,138 +774,133 @@ def mutate(ind: np.ndarray, rate: float, sigma: float, max_abs: float) -> np.nda
     return np.clip(ind, -max_abs, max_abs)
 
 
-def run_ga_offset(points: List[Point], params: GAParams) -> Tuple[np.ndarray, np.ndarray, float]:
-    # Resample for stable optimization resolution
-    t_start = time.perf_counter()
-    pts_arr = resample_polyline_arclength(points, max(len(points), params.target_samples))
-    print(f"[GA-offset] Resampled to {pts_arr.shape[0]} points (target_samples={params.target_samples})")
-    pts_list = pts_arr.tolist()
-    _, normals = compute_tangents_and_normals(pts_list)
-    # Optional grouping and straights-only selection
-    sel_idxs = select_indices_group_and_straights(np.asarray(pts_list, dtype=float), params.group_step, params.use_straights_only, params.curvature_threshold)
-    base_pts = [pts_list[i] for i in sel_idxs.tolist()]
-    base_normals = np.asarray(normals, dtype=float)[sel_idxs]
-    n = len(base_pts)
-    print(f"[GA-offset] Using {n}/{len(pts_list)} points (group_step={params.group_step}, straights_only={params.use_straights_only}, curv_thr={params.curvature_threshold})")
-    print(f"[GA-offset] GA config: pop={params.population_size}, gen={params.generations}")
-    pop = [np.random.uniform(-0.2, 0.2, size=n).astype(float) for _ in range(params.population_size)]
-    fitness = [evaluate_individual_offset(base_pts, base_normals, ind, params) for ind in pop]
+# def run_ga_offset(points: List[Point], params: GAParams) -> Tuple[np.ndarray, np.ndarray, float]:
+#     # Resample for stable optimization resolution
+#     t_start = time.perf_counter()
+#     pts_arr = resample_polyline_arclength(points, max(len(points), params.target_samples))
+#     print(f"[GA-offset] Resampled to {pts_arr.shape[0]} points (target_samples={params.target_samples})")
+#     pts_list = pts_arr.tolist()
+#     _, normals = compute_tangents_and_normals(pts_list)
+#     # Optional grouping and straights-only selection
+#     sel_idxs = select_indices_group_and_straights(np.asarray(pts_list, dtype=float), params.group_step, params.use_straights_only, params.curvature_threshold)
+#     base_pts = [pts_list[i] for i in sel_idxs.tolist()]
+#     base_normals = np.asarray(normals, dtype=float)[sel_idxs]
+#     n = len(base_pts)
+#     print(f"[GA-offset] Using {n}/{len(pts_list)} points (group_step={params.group_step}, straights_only={params.use_straights_only}, curv_thr={params.curvature_threshold})")
+#     print(f"[GA-offset] GA config: pop={params.population_size}, gen={params.generations}")
+#     pop = [np.random.uniform(-0.2, 0.2, size=n).astype(float) for _ in range(params.population_size)]
+#     fitness = [evaluate_individual_offset(base_pts, base_normals, ind, params) for ind in pop]
 
-    num_elite = max(1, int(params.elite_fraction * params.population_size))
+#     num_elite = max(1, int(params.elite_fraction * params.population_size))
 
-    best_offsets = pop[int(np.argmin(fitness))].copy()
-    best_time = float(min(fitness))
+#     best_offsets = pop[int(np.argmin(fitness))].copy()
+#     best_time = float(min(fitness))
 
-    last_report = -1
-    no_improve = 0
-    for _gen in range(params.generations):
-        # Elitism
-        elite_idx = np.argsort(fitness)[:num_elite]
-        new_pop: List[np.ndarray] = [pop[i].copy() for i in elite_idx]
+#     last_report = -1
+#     no_improve = 0
+#     for _gen in range(params.generations):
+#         # Elitism
+#         elite_idx = np.argsort(fitness)[:num_elite]
+#         new_pop: List[np.ndarray] = [pop[i].copy() for i in elite_idx]
 
-        # Create rest via tournament selection, crossover, mutation
-        while len(new_pop) < params.population_size:
-            i1 = tournament_select(pop, fitness, params.tournament_k)
-            i2 = tournament_select(pop, fitness, params.tournament_k)
-            c1, c2 = crossover(pop[i1], pop[i2], params.crossover_rate)
-            # Adaptive mutation sigma (annealing + stagnation boost)
-            sigma_prog = (1.0 - (_gen / max(params.generations - 1, 1))) if params.use_annealing else 1.0
-            sigma = params.mutation_sigma_end + (params.mutation_sigma_start - params.mutation_sigma_end) * sigma_prog
-            if no_improve >= params.stagnation_patience // 2:
-                sigma *= 1.5
-            c1 = mutate(c1, params.mutation_rate, sigma, params.max_offset)
-            if len(new_pop) < params.population_size:
-                new_pop.append(c1)
-            if len(new_pop) < params.population_size:
-                c2 = mutate(c2, params.mutation_rate, sigma, params.max_offset)
-                new_pop.append(c2)
+#         # Create rest via tournament selection, crossover, mutation
+#         while len(new_pop) < params.population_size:
+#             i1 = tournament_select(pop, fitness, params.tournament_k)
+#             i2 = tournament_select(pop, fitness, params.tournament_k)
+#             c1, c2 = crossover(pop[i1], pop[i2], params.crossover_rate)
+#             # Adaptive mutation sigma (annealing + stagnation boost)
+#             sigma_prog = (1.0 - (_gen / max(params.generations - 1, 1))) if params.use_annealing else 1.0
+#             sigma = params.mutation_sigma_end + (params.mutation_sigma_start - params.mutation_sigma_end) * sigma_prog
+#             if no_improve >= params.stagnation_patience // 2:
+#                 sigma *= 1.5
+#             c1 = mutate(c1, params.mutation_rate, sigma, params.max_offset)
+#             if len(new_pop) < params.population_size:
+#                 new_pop.append(c1)
+#             if len(new_pop) < params.population_size:
+#                 c2 = mutate(c2, params.mutation_rate, sigma, params.max_offset)
+#                 new_pop.append(c2)
 
-        pop = new_pop
-        fitness = [evaluate_individual_offset(base_pts, base_normals, ind, params) for ind in pop]
+#         pop = new_pop
+#         fitness = [evaluate_individual_offset(base_pts, base_normals, ind, params) for ind in pop]
 
-        gen_best_idx = int(np.argmin(fitness))
-        gen_best = pop[gen_best_idx]
-        gen_best_fit = float(fitness[gen_best_idx])
-        if gen_best_fit < best_time - 1e-6:
-            best_time = gen_best_fit
-            best_offsets = gen_best.copy()
-            no_improve = 0
-        else:
-            no_improve += 1
+#         gen_best_idx = int(np.argmin(fitness))
+#         gen_best = pop[gen_best_idx]
+#         gen_best_fit = float(fitness[gen_best_idx])
+#         if gen_best_fit < best_time - 1e-6:
+#             best_time = gen_best_fit
+#             best_offsets = gen_best.copy()
+#             no_improve = 0
+#         else:
+#             no_improve += 1
 
-        # Random immigrants to maintain diversity
-        if params.immigrants_fraction > 0.0:
-            num_imm = int(params.immigrants_fraction * params.population_size)
-            if num_imm > 0:
-                worst_idx = np.argsort(fitness)[-num_imm:]
-                for wi in worst_idx:
-                    pop[wi] = np.random.uniform(-0.2, 0.2, size=n).astype(float)
-                    fitness[wi] = evaluate_individual_offset(base_pts, base_normals, pop[wi], params)
-        if _gen % 10 == 0 and _gen != last_report:
-            last_report = _gen
-            mean_fit = float(np.mean(fitness))
-            std_fit = float(np.std(fitness))
-            print(f"[GA-offset] gen={_gen:4d} best_time={best_time:.4f}  mean={mean_fit:.4f}  std={std_fit:.4f}  no_improve={no_improve}")
+#         # Random immigrants to maintain diversity
+#         if params.immigrants_fraction > 0.0:
+#             num_imm = int(params.immigrants_fraction * params.population_size)
+#             if num_imm > 0:
+#                 worst_idx = np.argsort(fitness)[-num_imm:]
+#                 for wi in worst_idx:
+#                     pop[wi] = np.random.uniform(-0.2, 0.2, size=n).astype(float)
+#                     fitness[wi] = evaluate_individual_offset(base_pts, base_normals, pop[wi], params)
+#         if _gen % 10 == 0 and _gen != last_report:
+#             last_report = _gen
+#             mean_fit = float(np.mean(fitness))
+#             std_fit = float(np.std(fitness))
+#             print(f"[GA-offset] gen={_gen:4d} best_time={best_time:.4f}  mean={mean_fit:.4f}  std={std_fit:.4f}  no_improve={no_improve}")
 
-        # Restart non-elite on prolonged stagnation
-        if no_improve >= params.stagnation_patience:
-            base_pop_size = params.population_size - num_elite
-            new_pop = [pop[i].copy() for i in elite_idx]
-            new_pop.extend([np.random.uniform(-0.2, 0.2, size=n).astype(float) for _ in range(max(0, base_pop_size))])
-            pop = new_pop[:params.population_size]
-            fitness = [evaluate_individual_offset(base_pts, base_normals, ind, params) for ind in pop]
-            no_improve = 0
-            print("[GA-offset] Restart triggered (stagnation)")
+#         # Restart non-elite on prolonged stagnation
+#         if no_improve >= params.stagnation_patience:
+#             base_pop_size = params.population_size - num_elite
+#             new_pop = [pop[i].copy() for i in elite_idx]
+#             new_pop.extend([np.random.uniform(-0.2, 0.2, size=n).astype(float) for _ in range(max(0, base_pop_size))])
+#             pop = new_pop[:params.population_size]
+#             fitness = [evaluate_individual_offset(base_pts, base_normals, ind, params) for ind in pop]
+#             no_improve = 0
+#             print("[GA-offset] Restart triggered (stagnation)")
 
-    # Interpolate offsets back to full resolution along the selected index parameterization
-    sel_s = np.linspace(0.0, 1.0, n)
-    full_s = np.linspace(0.0, 1.0, len(pts_list))
-    best_offsets_full = np.interp(full_s, sel_s, best_offsets)
-    # Smooth offsets for realistic steering continuity and rebuild path
-    best_offsets_full = smooth_series_moving_average(best_offsets_full, repeats=1)
-    best_path = build_offset_path(pts_list, normals, best_offsets_full)
-    dt = time.perf_counter() - t_start
-    print(f"[GA-offset] Done. best_time={best_time:.4f}  duration={dt:.2f}s")
-    return best_offsets, best_path, best_time
+#     # Interpolate offsets back to full resolution along the selected index parameterization
+#     sel_s = np.linspace(0.0, 1.0, n)
+#     full_s = np.linspace(0.0, 1.0, len(pts_list))
+#     best_offsets_full = np.interp(full_s, sel_s, best_offsets)
+#     # Smooth offsets for realistic steering continuity and rebuild path
+#     best_offsets_full = smooth_series_moving_average(best_offsets_full, repeats=1)
+#     best_path = build_offset_path(pts_list, normals, best_offsets_full)
+#     dt = time.perf_counter() - t_start
+#     print(f"[GA-offset] Done. best_time={best_time:.4f}  duration={dt:.2f}s")
+#     return best_offsets, best_path, best_time
 
-def create_racing_line_initialization(inner: np.ndarray, outer: np.ndarray, apex_fraction: float = 0.5) -> np.ndarray:
+def create_racing_line_initialization(inner: np.ndarray, outer: np.ndarray, apex_fraction: float = 0.55) -> np.ndarray:
     """
-    Създава класическа racing line: външно-вътрешно-външно
-    
-    Args:
-        inner: вътрешна граница на коридора
-        outer: външна граница на коридора
-        apex_fraction: къде е апексът (0.5 = средата на завоя)
-    
-    Returns:
-        alphas: коефициенти за всяка точка (0=вътре, 1=външно)
+    КОНСЕРВАТИВНА racing line за стабилна инициализация
+    GA ще я оптимизира към агресивна линия след това
     """
     n = inner.shape[0]
     
-    # Намери апекса (точката с най-голяма кривина)
+    # Намери апекса по кривина
     midline = 0.5 * (inner + outer)
     kappa = np.abs(estimate_curvature_series(midline))
-    apex_idx = int(np.argmax(kappa))
+    if kappa.size > 0 and np.max(kappa) > 1e-6:
+        apex_idx = int(np.argmax(kappa))
+    else:
+        apex_idx = n // 2
     
-    # Или използвай фиксиран процент:
-    # apex_idx = int(n * apex_fraction)
-    
+    # ПЛАВНА инициализация (не агресивна!)
     alphas = np.zeros(n)
     
-    # Вход: плавен преход от външно (1.0) към апекс
-    entry_length = apex_idx
-    if entry_length > 0:
-        alphas[:apex_idx] = np.linspace(0.95, 0.05, entry_length)  # 0.95=външно, 0.05=вътрешно
+    # ВХОД: синусоидален преход от външно към апекс
+    if apex_idx > 0:
+        t = np.linspace(0, np.pi/2, apex_idx)
+        alphas[:apex_idx] = 0.70 - 0.40 * np.sin(t)  # 0.70 -> 0.30
     
-    # Апекс: най-вътрешна точка
-    alphas[apex_idx] = 0.0
+    # АПЕКС: умерено вътрешно
+    alphas[apex_idx] = 0.30
     
-    # Изход: плавен преход от апекс към външно
+    # ИЗХОД: синусоидален преход от апекс към външно
     exit_length = n - apex_idx - 1
     if exit_length > 0:
-        alphas[apex_idx+1:] = np.linspace(0.05, 0.95, exit_length)
+        t = np.linspace(0, np.pi/2, exit_length)
+        alphas[apex_idx+1:] = 0.30 + 0.40 * np.sin(t)  # 0.30 -> 0.70
     
-    # Изгладяване за плавност
+    # СИЛНО изглаждане за стабилност
     alphas = smooth_series_moving_average(alphas, repeats=3)
     
     return np.clip(alphas, 0.0, 1.0)
@@ -919,6 +1037,13 @@ def run_ga_corridor(inner: np.ndarray, outer: np.ndarray, params: GAParams) -> T
                 fitness = [f.result() for f in futures]
         else:
             fitness = [_evaluate_with_cache(inner_rs, outer_rs, ind, params_for_gen(0), cache_extra_key, params.cache_granularity) for ind in pop]
+            # ДОБАВИ:
+            print(f"[DEBUG] Initial fitness range: min={np.min(fitness):.2f}, max={np.max(fitness):.2f}, mean={np.mean(fitness):.2f}")
+            print(f"[DEBUG] Initial best alpha range: min={np.min(best_alphas):.3f}, max={np.max(best_alphas):.3f}, mean={np.mean(best_alphas):.3f}")
+
+            # Провери дали има валидни решения
+            valid_count = np.sum(np.array(fitness) < 1e6)
+            print(f"[DEBUG] Valid solutions: {valid_count}/{len(fitness)}")
 
         best_idx = int(np.argmin(fitness))
         best_alphas = pop[best_idx].copy()
@@ -994,6 +1119,13 @@ def run_ga_corridor(inner: np.ndarray, outer: np.ndarray, params: GAParams) -> T
                     fitness = [f.result() for f in futures]
             else:
                 fitness = [_evaluate_with_cache(inner_rs, outer_rs, ind, params_eval, cache_extra_key_gen, params.cache_granularity) for ind in pop]
+                # ДОБАВИ:
+                print(f"[DEBUG] Initial fitness range: min={np.min(fitness):.2f}, max={np.max(fitness):.2f}, mean={np.mean(fitness):.2f}")
+                print(f"[DEBUG] Initial best alpha range: min={np.min(best_alphas):.3f}, max={np.max(best_alphas):.3f}, mean={np.mean(best_alphas):.3f}")
+
+                # Провери дали има валидни решения
+                valid_count = np.sum(np.array(fitness) < 1e6)
+                print(f"[DEBUG] Valid solutions: {valid_count}/{len(fitness)}")
 
             # Optional logging of time vs penalty ratio on current best individual
             try:
@@ -1073,13 +1205,16 @@ def run_ga_corridor(inner: np.ndarray, outer: np.ndarray, params: GAParams) -> T
         print(f"[GA-corridor] Stage {stage_idx+1} done in {time.perf_counter()-t_stage:.2f}s best={best_time:.4f}")
 
     # Final smoothing and path construction at full resolution
+    # ИЗТРИЙ ВСИЧКО И СЛОЖИ:
     inner_final, outer_final, mid_final = prepare_sampling(inner, outer, full_target)
-    best_alphas_full = np.clip(smooth_series_moving_average(best_alphas_full_res, repeats=1), 0.0, 1.0)
-    # Post-process to enforce straightness and rate limit
-    print(f"[GA-corridor] Pre-processing: straightening best solution...")
-    best_alphas_full = fit_force_straight(best_alphas_full, max_change=float(params.alpha_post_max_change))
-    best_alphas_full = fit_force_straight(best_alphas_full, max_change=max(0.001, float(params.alpha_post_max_change) * 0.6))
+
+    # Директно използвай резултата - БЕЗ post-processing!
+    best_alphas_full = best_alphas_full_res.copy()
+
+    # Само минимален rate limit за физична възможност
     best_alphas_full = np.clip(limit_series_rate(best_alphas_full, params.alpha_delta_max), 0.0, 1.0)
+
+    # Построй финалната линия
     best_path = build_path_from_corridor(inner_final, outer_final, best_alphas_full)
     # Curvature validation report
     try:
@@ -1158,6 +1293,8 @@ def main():
         if inner_edge.shape[0] == len(points) and outer_edge.shape[0] == len(points):
             use_corridor = True
 
+
+  
     # Apply car presets (can be overridden by explicit flags)
     preset = None
     if args.car_preset == "f1_2024":
@@ -1194,37 +1331,125 @@ def main():
         base_bpw = args.brake_power
 
     params = GAParams(
-        population_size=args.pop,
-        generations=args.gen,
-        mass_kg=base_mass,
-        mu_friction=base_mu,
-        gravity=base_g,
-        rho_air=base_rho,
-        cL_downforce=base_cL,
-        frontal_area_m2=base_area,
-        engine_power_watts=base_power,
-        a_brake_max=base_abrake,
-        a_accel_cap=base_aaccel,
-        cD_drag=base_cD,
-        c_rr=base_crr,
-        safety_speed_margin=base_safety,
-        brake_power_watts=base_bpw,
-        target_samples=max(len(points), 300),
+    # === ПОПУЛАЦИЯ ===
+        population_size=150,  # Намали от 200
+        generations=400,      # Намали от 600
+        elite_fraction=0.15,
+        
+        # === RESOLUTION - ЗАПОЧНИ ПО-НИСКО ===
+        target_samples=300,  # Намали от 500 (по-стабилно)
+        
+        # === КРИВИНА - РЕАЛИСТИЧНА ===
+        max_curvature=0.10,          # Реалистична за F1
+        curvature_hardness=5.0,
+        curvature_hard_penalty=50.0,
+        curvature_soft_penalty=8.0,
+        
+        # === ALPHA ПРОМЕНИ - УМЕРЕНИ ===
+        alpha_delta_max=0.12,
+        alpha_rate_lambda=0.6,
+        alpha_post_max_change=0.008,
+        
+        # === STRAIGHTNESS ===
+        straightness_bonus=0.15,
+        
+        # === БАЛАНС ВРЕМЕ/PENALTIES ===
+        time_weight=1200.0,     # Умерено високо
+        penalty_weight=0.5,     # По-балансирано
+        adaptive_time_weight=True,
+        
+        # === PENALTIES - БАЛАНСИРАНИ ===
+        smoothness_lambda=0.0010,
+        offset_smooth_lambda=0.008,
+        curvature_lambda=0.0002,
+        heading_spike_lambda=0.006,
+        heading_max_delta_rad=0.45,
+        steering_rate_lambda=0.20,
+        
+        # === ФИЗИКА ===
+        long_accel_lambda=0.00012,
+        long_jerk_lambda=0.00012,
+        
+        # === МУТАЦИЯ - УМЕРЕНА ===
+        use_annealing=True,
+        mutation_sigma_start=0.15,  # ПО-МАЛКА стартова мутация
+        mutation_sigma_end=0.03,
+        mutation_rate=0.25,
+        
+        # === DIVERSITY ===
+        immigrants_fraction=0.15,   # УВЕЛИЧИ immigrants
+        diversity_target=0.05,
+        stagnation_patience=50,     # ПО-КРАТКО търпение
+        
+        # === CROSSOVER ===
+        use_adaptive_crossover=True,
+        crossover_rate=0.90,
+        
+        # === B-SPLINE - ИЗКЛЮЧЕН ===
+        use_bspline=False,
+        bspline_smoothing=0.0,
+        
+        # === SAMPLING ===
+        curvature_sampling_beta=2.0,  # НАМАЛИ от 3.5
+        
+        # === COARSE-TO-FINE ===
+        coarse_to_fine=True,
+        coarse_factor=0.30,  # УВЕЛИЧИ coarse фазата (по-дълга)
+        adaptive_penalty_decay=0.93,
+        
+        # === VEHICLE - РЕАЛИСТИЧЕН F1 ===
+        mass_kg=798.0,
+        mu_friction=2.2,            # Намали от 2.5
+        cL_downforce=4.8,           # Намали от 5.5
+        engine_power_watts=760000.0,
+        a_brake_max=56.0,           # Намали от 65
+        a_accel_cap=23.0,           # Намали от 28
+        safety_speed_margin=0.98,   # УВЕЛИЧИ от 0.96
+        brake_power_watts=1200000.0,
+        
+        gravity=9.81,
+        rho_air=1.225,
+        frontal_area_m2=1.6,
+        cD_drag=1.0,
+        c_rr=0.004,
+        
+        # === ADVANCED ===
+        enable_parallel=True,
+        parallel_workers=max(1, os.cpu_count() or 1),
+        cache_granularity=0.002,
+        use_dynamic_population=False,
     )
 
     print(f"Optimizing path for: {turn_csv}")
-    if use_corridor:
-        print("[main] Mode: corridor (alphas)")
-    else:
-        print("[main] Mode: offset from centerline")
+        # След зареждането на коридора:
     if use_corridor and inner_edge is not None and outer_edge is not None:
-        _ret = run_ga_corridor(inner_edge, outer_edge, params)
-        if isinstance(_ret, tuple) and len(_ret) == 3:
-            _, best_path, best_fit = _ret
+        print(f"[main] Original corridor: inner={inner_edge.shape[0]}, outer={outer_edge.shape[0]} points")
+        
+        # === ЗАТВОРИ КОРИДОРА ===
+        inner_closed, outer_closed = close_corridor_segment(inner_edge, outer_edge, extension_factor=0.20)
+        print(f"[main] Closed corridor: inner={inner_closed.shape[0]}, outer={outer_closed.shape[0]} points (added entries/exits)")
+        
+        # Оптимизирай затворения коридор
+        _ret = run_ga_corridor(inner_closed, outer_closed, params)
+        
+        if isinstance(_ret, tuple) and len(_ret) == 4:
+            best_alphas_result, best_path_full, best_fit, _fitness_history = _ret
+        elif isinstance(_ret, tuple) and len(_ret) == 3:
+            best_alphas_result, best_path_full, best_fit = _ret
         else:
-            _, best_path, best_fit, _fitness_history = _ret
-    else:
-        _, best_path, best_fit = run_ga_offset(points, params)
+            raise ValueError(f"Unexpected return: {len(_ret)} values")
+        
+        # === ИЗВАДИ САМО ОРИГИНАЛНИЯ СЕГМЕНТ (без удълженията) ===
+        # Удължението е 20% от оригиналната дължина на всяка страна
+        orig_len = inner_edge.shape[0]
+        ext_len = int(orig_len * 0.20)
+        
+        # Извади централната част (оригиналния завой)
+        start_idx = ext_len
+        end_idx = len(best_path_full) - ext_len
+        best_path = best_path_full[start_idx:end_idx]
+        
+        print(f"[main] Extracted original turn segment: {best_path.shape[0]} points")
 
     # Resample best path to the same number of points as the original segment for compact CSV
     try:
@@ -1264,6 +1489,63 @@ def main():
     except Exception as e:
         print(f"Analysis error: {e}")
     print(f"Wrote best path: {out_path}")
+
+    # В края на main(), след write_points_csv:
+
+    print("\n=== 🏁 AGGRESSIVE RACING LINE ANALYSIS ===")
+
+    vp = VehicleParams(
+        mass_kg=params.mass_kg, 
+        mu_friction=params.mu_friction,
+        cL_downforce=params.cL_downforce, 
+        engine_power_watts=params.engine_power_watts,
+        a_brake_max=params.a_brake_max, 
+        a_accel_cap=params.a_accel_cap,
+        cD_drag=params.cD_drag, 
+        c_rr=params.c_rr,
+        safety_speed_margin=params.safety_speed_margin,
+        brake_power_watts=params.brake_power_watts,
+        gravity=params.gravity,
+        rho_air=params.rho_air,
+        frontal_area_m2=params.frontal_area_m2,
+    )
+
+    s_agg, kappa_agg, v_lat, v_agg = speed_profile(best_path.tolist(), vp)
+    t_agg = compute_lap_time_seconds(s_agg, v_agg)
+
+    # Използвай best_alphas_result (от run_ga_corridor return)
+    best_alphas_analysis = np.interp(
+        np.linspace(0, 1, len(best_path)), 
+        np.linspace(0, 1, len(best_alphas_result)),
+        best_alphas_result
+    )
+    apex_idx = int(np.argmin(best_alphas_analysis))
+
+
+
+    print(f"\n⚡ LAP TIME: {t_agg:.3f}s")
+    print(f"\n🚀 SPEED ZONES:")
+    print(f"  ENTRY speed: {v_agg[0]*3.6:.1f} km/h ← ЦЕЛИ 100+ km/h!")
+    print(f"  APEX speed:  {v_agg[apex_idx]*3.6:.1f} km/h")
+    print(f"  EXIT speed:  {v_agg[-1]*3.6:.1f} km/h")
+    print(f"  MAX speed:   {np.max(v_agg)*3.6:.1f} km/h")
+    print(f"  MIN speed:   {np.min(v_agg)*3.6:.1f} km/h")
+
+    print(f"\n🎯 APEX:")
+    print(f"  Position: {apex_idx}/{len(best_path)} ({apex_idx/len(best_path)*100:.1f}%)")
+    print(f"  Alpha: {best_alphas_analysis[apex_idx]:.3f} (0=inner, 1=outer)")
+    print(f"  Track position: {'INNER' if best_alphas_analysis[apex_idx] < 0.3 else 'MID' if best_alphas_analysis[apex_idx] < 0.7 else 'OUTER'}")
+
+    print(f"\n📐 CURVATURE:")
+    kappa_final = estimate_curvature_series(best_path)
+    print(f"  Max κ: {np.max(np.abs(kappa_final)):.6f}")
+    violations = np.sum(np.abs(kappa_final) > params.max_curvature)
+    print(f"  Violations: {violations}/{len(kappa_final)} ({violations/len(kappa_final)*100:.1f}%)")
+
+    # Провери дали входната скорост е близо до 100 km/h
+    if v_agg[0]*3.6 < 80:
+        print(f"\n⚠️  WARNING: Entry speed too low! ({v_agg[0]*3.6:.1f} km/h)")
+        print(f"   Try increasing mu_friction or cL_downforce")
 
 
 if __name__ == "__main__":
