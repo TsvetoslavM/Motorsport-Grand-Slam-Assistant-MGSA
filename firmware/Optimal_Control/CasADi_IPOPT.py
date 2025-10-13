@@ -3,6 +3,17 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
+try:
+    from .constraints import add_constraints
+except Exception:
+    try:
+        # Try absolute package path from project root
+        from firmware.Optimal_Control.constraints import add_constraints
+    except Exception:
+        # Last resort: running as a script from this directory
+        import os, sys
+        sys.path.append(os.path.dirname(__file__))
+        from constraints import add_constraints
 
 # --- Vehicle Parameters Dataclass (Realistic F1 specs) ---
 @dataclass
@@ -151,108 +162,25 @@ reg_slack = 1e3 * ca.sum1(slack_power**2)  # Penalize slack usage
 
 opti.minimize(lap_time + path_length_penalty + reg_n + reg_a + reg_slack)
 
-# --- Constraints ---
+"""Constraints moved to dedicated module and imported above."""
 vehicle.mu_friction = 2.2
 vehicle.cL_downforce = 3.0
 vehicle.a_accel_max = 12.0
 vehicle.a_brake_max = 45.0
 
-# 1. Track boundaries (with small margin for numerical stability)
-boundary_margin = 0.1
-for i in range(N):
-    opti.subject_to(n[i] >= -w_left[i] + boundary_margin)
-    opti.subject_to(n[i] <= w_right[i] - boundary_margin)
-
-# 2. Velocity continuity (using trapezoidal integration)
-for i in range(N):
-    i_next = (i + 1) % N
-    v_avg = 0.5 * (v[i] + v[i_next])
-    dt = ds_array[i] / (v_avg + 1e-3)
-    
-    # v_next = v_current + a * dt
-    opti.subject_to(v[i_next] == v[i] + a_lon[i] * dt)
-
-# 3. Velocity bounds
-for i in range(N):
-    opti.subject_to(v[i] >= vehicle.v_min)
-    opti.subject_to(v[i] <= vehicle.v_max)
-
-# 4. Calculate lateral acceleration based on path curvature
-a_lat = ca.MX.zeros(N)
-for i in range(N):
-    # Path curvature considering the offset from centerline
-    # Approximate: kappa_path ≈ kappa_center / (1 - kappa_center * n)
-    kappa_center = curvature[i]
-    # avoid division by near-zero: safe denom
-    denom = 1.0 - kappa_center * n[i]
-    denom = ca.fmax(denom, 1e-3)  # prevent blow-ups (smooth approx)
-    kappa_path = kappa_center / denom
-    
-    # Lateral acceleration = v^2 * curvature
-    a_lat[i] =(v[i]**4) * (kappa_path**2)
-
-# 5. Combined traction circle constraint (THE KEY CONSTRAINT)
-for i in range(N):
-    # Available grip increases with downforce
-    F_normal = vehicle.mass_kg * (vehicle.gravity + vehicle.k_aero() * v[i]**2)
-    a_max_total = vehicle.mu_friction * F_normal / vehicle.mass_kg  # in m/s^2
-    a_max_total_sq = a_max_total**2
-
-    # Traction ellipse: a_lon^2 + a_lat^2 <= a_max^2  -> use squared lateral
-    opti.subject_to(a_lon[i]**2 + a_lat[i] <= a_max_total_sq)
-
-# 6. Power constraints (with slack for numerical stability)
-for i in range(N):
-    # Drag and rolling resistance
-    F_drag = vehicle.k_drag() * v[i]**2
-    F_rolling = vehicle.c_rr * vehicle.mass_kg * vehicle.gravity
-    F_resistance = F_drag + F_rolling
-    
-    # Power required/available
-    P_required = vehicle.mass_kg * a_lon[i] * v[i] + F_resistance * v[i]
-    
-    # Use slack variables for softer power constraints
-    opti.subject_to(P_required <= vehicle.engine_power_watts + slack_power[i])
-    opti.subject_to(P_required >= -vehicle.brake_power_watts - slack_power[i])
-    
-    # Limit slack usage
-    opti.subject_to(slack_power[i] >= 0)
-    opti.subject_to(slack_power[i] <= 100000)  # Max 100kW slack
-
-# 7. Acceleration limits
-for i in range(N):
-    opti.subject_to(a_lon[i] >= -vehicle.a_brake_max)
-    opti.subject_to(a_lon[i] <= vehicle.a_accel_max)
-
-# 8. Path smoothness constraints (relaxed for better convergence)
-for i in range(N):
-    i_next = (i + 1) % N
-    
-    # Limit change in lateral position
-    dn = n[i_next] - n[i]
-    max_dn = 3.0  # Allow up to 3m change per segment
-    opti.subject_to(dn >= -max_dn)
-    opti.subject_to(dn <= max_dn)
-
-# 9. Limit jerk (change in acceleration) for realism
-max_jerk = 30.0  # m/s^3
-for i in range(N):
-    i_next = (i + 1) % N
-    v_avg = 0.5 * (v[i] + v[i_next])
-    dt = ds_array[i] / (v_avg + 1e-3)
-    
-    jerk = (a_lon[i_next] - a_lon[i]) / dt
-    opti.subject_to(jerk >= -max_jerk)
-    opti.subject_to(jerk <= max_jerk)
-
-#А APEX CLIPPING
-for i in range(N):
-    if abs(curvature[i]) > 0.01:  # В завой
-        if curvature[i] > 0:  # Ляв завой
-            # Принуди колата да мине поне 70% навътре
-            opti.subject_to(n[i] >= w_left[i] * 0.7)
-        else:  # Десен завой
-            opti.subject_to(n[i] <= -w_right[i] * 0.7)
+# Add all constraints and get a_lat back for plotting/stats
+a_lat = add_constraints(
+    opti=opti,
+    vehicle=vehicle,
+    n=n,
+    v=v,
+    a_lon=a_lon,
+    slack_power=slack_power,
+    w_left=w_left,
+    w_right=w_right,
+    ds_array=ds_array,
+    curvature=curvature,
+)
 
 # --- Initial guess (CRITICAL for convergence) ---
 # Start with a reasonable racing line and speed profile
