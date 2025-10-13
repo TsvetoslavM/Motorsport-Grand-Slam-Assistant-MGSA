@@ -140,16 +140,19 @@ for i in range(N):
 
 # --- Objective: Minimize lap time with regularization ---
 lap_time = ca.sum1(ds_array / v)
+path_diffs = [ca.sqrt((n[i+1] - n[i])**2 + ds_array[i]**2) for i in range(N-1)]
+path_length_penalty = 0.01 * ca.sum1(ca.vertcat(*path_diffs))
+
 
 # Regularization terms (small weights to help convergence)
-reg_n = 1e-6 * ca.sum1(n**2)  # Prefer staying near centerline
+reg_n = 1e-8 * ca.sum1(n**2)  # Prefer staying near centerline
 reg_a = 1e-6 * ca.sum1(a_lon**2)  # Smooth acceleration
 reg_slack = 1e3 * ca.sum1(slack_power**2)  # Penalize slack usage
 
-opti.minimize(lap_time + reg_n + reg_a + reg_slack)
+opti.minimize(lap_time + path_length_penalty + reg_n + reg_a + reg_slack)
 
 # --- Constraints ---
-vehicle.mu_friction = 1.8
+vehicle.mu_friction = 2.2
 vehicle.cL_downforce = 3.0
 vehicle.a_accel_max = 12.0
 vehicle.a_brake_max = 45.0
@@ -242,17 +245,26 @@ for i in range(N):
     opti.subject_to(jerk >= -max_jerk)
     opti.subject_to(jerk <= max_jerk)
 
+#А APEX CLIPPING
+for i in range(N):
+    if abs(curvature[i]) > 0.01:  # В завой
+        if curvature[i] > 0:  # Ляв завой
+            # Принуди колата да мине поне 70% навътре
+            opti.subject_to(n[i] >= w_left[i] * 0.7)
+        else:  # Десен завой
+            opti.subject_to(n[i] <= -w_right[i] * 0.7)
+
 # --- Initial guess (CRITICAL for convergence) ---
 # Start with a reasonable racing line and speed profile
 
 # Initial position: slight racing line based on curvature
 n_init = np.zeros(N)
 for i in range(N):
-    if curvature[i] > 0:  # Left turn
-        n_init[i] = w_right[i] * 0.5  # Start from right side
-    elif curvature[i] < 0:  # Right turn
-        n_init[i] = -w_left[i] * 0.5  # Start from left side
-    else:  # Straight
+    if curvature[i] > 0.001:  # Ляв завой
+        n_init[i] = w_left[i] * 0.8  # Започни от 80% вътре
+    elif curvature[i] < -0.001:  # Десен завой
+        n_init[i] = -w_right[i] * 0.8
+    else:
         n_init[i] = 0
 
 # Initial velocity: vary based on curvature
