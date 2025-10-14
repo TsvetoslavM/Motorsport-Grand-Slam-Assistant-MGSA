@@ -464,7 +464,7 @@ plt.show()
 
 # Print summary
 print(f"\n{'='*60}")
-print(f"🏁 F1 LAP TIME OPTIMIZATION COMPLETE 🏁")
+print(f"F1 LAP TIME OPTIMIZATION COMPLETE")
 print(f"{'='*60}")
 print(f"LAP TIME:       {lap_time_seconds:.2f} seconds")
 print(f"Average speed:  {np.mean(v_opt):.2f} m/s ({np.mean(v_opt)*3.6:.1f} km/h)")
