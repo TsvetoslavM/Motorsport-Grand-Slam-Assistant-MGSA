@@ -456,7 +456,7 @@ fig.text(0.02, 0.02, stats_text, fontsize=9, family='monospace',
                   edgecolor='cyan', linewidth=2),
          verticalalignment='bottom')
 
-plt.suptitle("🏎️  F1 LAP TIME OPTIMIZATION  🏁", 
+plt.suptitle("F1 LAP TIME OPTIMIZATION ", 
             fontsize=20, fontweight='bold', y=0.98)
 
 plt.tight_layout()
