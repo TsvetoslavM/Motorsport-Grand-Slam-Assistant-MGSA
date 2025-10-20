@@ -96,13 +96,154 @@ def add_constraints(
         opti.subject_to(jerk >= -max_jerk)
         opti.subject_to(jerk <= max_jerk)
 
-   # 10) Apex clipping heuristic
-    # for i in range(N):
-    #     if abs(float(curvature[i])) > 0.01:
-    #         if float(curvature[i]) > 0:
-    #             opti.subject_to(n[i] >= w_left[i] * 0.5)
-    #         else:
-    #             opti.subject_to(n[i] <= -w_right[i] * 0.5)
+    # 10) Apex constraints at curvature peaks (inner-side clipping only at apex)
+    # Detect local maxima of |curvature| above a threshold and constrain n there
+    try:
+        abs_curv = [abs(float(curvature[i])) for i in range(N)]
+        curv_thresh = 0.01
+        min_peak_separation = 5  # in discretization steps, to avoid clustered peaks
+        candidate_indices = []
+        for i in range(N):
+            i_prev = (i - 1) % N
+            i_next = (i + 1) % N
+            if abs_curv[i] > curv_thresh and abs_curv[i] >= abs_curv[i_prev] and abs_curv[i] >= abs_curv[i_next]:
+                candidate_indices.append(i)
+
+        # Thin peaks to ensure separation
+        apex_indices = []
+        for idx in candidate_indices:
+            if not apex_indices:
+                apex_indices.append(idx)
+                continue
+            if all(min((idx - j) % N, (j - idx) % N) >= min_peak_separation for j in apex_indices):
+                apex_indices.append(idx)
+
+        # Apply inner-side constraint at apex only
+        apex_inside_fraction = 0.6  # n must be at least 60% toward inside at apex
+        for i in apex_indices:
+            k = float(curvature[i])
+            if k > 0:
+                # Left-hand corner: positive curvature -> inside is to the left
+                opti.subject_to(n[i] >= apex_inside_fraction * w_left[i])
+            elif k < 0:
+                # Right-hand corner: negative curvature -> inside is to the right (negative n)
+                opti.subject_to(n[i] <= -apex_inside_fraction * w_right[i])
+            # if k == 0, skip
+    except Exception:
+        # If curvature is symbolic or detection fails, skip apex constraints gracefully
+        pass
+
+    # 11) Delay outside positioning in long corners (entry window constraint)
+    try:
+        abs_curv = [abs(float(curvature[i])) for i in range(N)]
+        curv_thresh = 0.01
+        is_corner = [1 if c > curv_thresh else 0 for c in abs_curv]
+
+        # Find contiguous segments of corner samples
+        segments = []
+        start = None
+        for i in range(N):
+            if is_corner[i] and start is None:
+                start = i
+            elif not is_corner[i] and start is not None:
+                segments.append((start, i - 1))
+                start = None
+        if start is not None:
+            segments.append((start, N - 1))
+
+        # Apply entry constraints for sufficiently long corners
+        min_long_len = 20
+        entry_fraction = 0.25
+        outside_fraction_require = 0.35  # required fraction toward outside during entry window
+
+        for (s0, s1) in segments:
+            seg_indices = list(range(s0, s1 + 1))
+            seg_len = len(seg_indices)
+            if seg_len < min_long_len:
+                continue
+
+            # Determine dominant curvature sign within the segment
+            seg_sign_sum = sum(float(curvature[i]) for i in seg_indices)
+            if seg_sign_sum == 0:
+                continue
+            sign_k = 1.0 if seg_sign_sum > 0 else -1.0
+
+            entry_len = max(3, int(entry_fraction * seg_len))
+            entry_len = min(entry_len, 30)
+            entry_indices = seg_indices[:entry_len]
+
+            for i in entry_indices:
+                if sign_k > 0:
+                    # Left-hand corner: outside is to the right (negative n)
+                    opti.subject_to(n[i] <= -outside_fraction_require * w_right[i])
+                else:
+                    # Right-hand corner: outside is to the left (positive n)
+                    opti.subject_to(n[i] >= outside_fraction_require * w_left[i])
+    except Exception:
+        # If detection fails (e.g., symbolic curvature), skip gracefully
+        pass
+
+    # 12) Force wide exit if a long straight follows the corner (exit window)
+    try:
+        abs_curv = [abs(float(curvature[i])) for i in range(N)]
+        curv_thresh = 0.01
+        is_corner = [1 if c > curv_thresh else 0 for c in abs_curv]
+
+        # contiguous corner segments
+        segments = []
+        start = None
+        for i in range(N):
+            if is_corner[i] and start is None:
+                start = i
+            elif not is_corner[i] and start is not None:
+                segments.append((start, i - 1))
+                start = None
+        if start is not None:
+            segments.append((start, N - 1))
+
+        # Detect long straight following a segment using curvature and ds
+        # We approximate straight length by counting samples with very low curvature
+        straight_thresh = 0.002
+        min_straight_len = 25  # samples of very low curvature after corner end
+        exit_fraction = 0.35
+        outside_fraction_require = 0.35
+
+        for (s0, s1) in segments:
+            # determine sign of corner
+            seg_indices = list(range(s0, s1 + 1))
+            seg_sign_sum = sum(float(curvature[i]) for i in seg_indices)
+            if seg_sign_sum == 0:
+                continue
+            sign_k = 1.0 if seg_sign_sum > 0 else -1.0
+
+            # scan ahead from s1 to see if a long straight follows
+            count_straight = 0
+            j = (s1 + 1) % N
+            while count_straight < min_straight_len:
+                if abs(float(curvature[j])) < straight_thresh:
+                    count_straight += 1
+                    j = (j + 1) % N
+                    if j == s0:
+                        break
+                else:
+                    break
+
+            if count_straight >= min_straight_len:
+                # enforce wide exit over the last portion of the corner
+                seg_len = len(seg_indices)
+                exit_len = max(3, int(exit_fraction * seg_len))
+                exit_len = min(exit_len, 30)
+                exit_indices = seg_indices[-exit_len:]
+
+                for i in exit_indices:
+                    if sign_k > 0:
+                        # Left-hand corner -> outside is right (negative n)
+                        opti.subject_to(n[i] <= -outside_fraction_require * w_right[i])
+                    else:
+                        # Right-hand corner -> outside is left (positive n)
+                        opti.subject_to(n[i] >= outside_fraction_require * w_left[i])
+    except Exception:
+        pass
     return a_lat
 
 
