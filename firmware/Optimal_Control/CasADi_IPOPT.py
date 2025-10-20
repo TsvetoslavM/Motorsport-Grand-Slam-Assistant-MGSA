@@ -309,7 +309,6 @@ opts = {
     'ipopt.nlp_scaling_method': 'gradient-based',
     'ipopt.line_search_method': 'filter',
     'ipopt.alpha_for_y': 'primal',
-    'ipopt.derivative_test': 'first-order',
     'error_on_fail': False
 }
 
