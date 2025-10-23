@@ -204,9 +204,9 @@ def add_constraints(
         # Detect long straight following a segment using curvature and ds
         # We approximate straight length by counting samples with very low curvature
         straight_thresh = 0.002
-        min_straight_len = 25  # samples of very low curvature after corner end
+        min_straight_len = 20  # samples of very low curvature after corner end
         exit_fraction = 0.35
-        outside_fraction_require = 0.35
+        outside_fraction_require = 0.95
 
         for (s0, s1) in segments:
             # determine sign of corner
