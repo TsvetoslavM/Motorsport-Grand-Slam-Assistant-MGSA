@@ -253,8 +253,36 @@ Max Curvature:
     plt.suptitle("F1 LAP TIME OPTIMIZATION - COMPLETE ANALYSIS", 
                 fontsize=18, fontweight='bold', y=0.995)
     
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+
+    # ===== HOVER POPUP ON RACING LINE =====
+    import mplcursors
+    cursor = mplcursors.cursor(lc, hover=True)
+
+    @cursor.connect("add")
+    def on_hover(sel):
+        # LineCollection returns tuple (segment_index, vertex_index)
+        i = sel.index
+        if isinstance(i, tuple):
+            i = i[0]
+
+        i = max(0, min(i, len(v_opt) - 1))
+
+        # Compose hover text
+        text = (
+            f"Segment: {i}\n"
+            f"Speed: {v_opt[i]*3.6:.1f} km/h\n"
+            f"Long. Accel: {a_lon_opt[i]:.2f} m/s²\n"
+            f"Lat. Accel: {a_lat_opt[i]:.2f} m/s²\n"
+            f"Total G: {np.sqrt(a_lon_opt[i]**2 + a_lat_opt[i]**2)/vehicle.gravity:.2f} G"
+        )
+        sel.annotation.set_text(text)
+        sel.annotation.arrow_patch.set(arrowstyle="simple", alpha=0.0)  # remove arrow
+        sel.annotation.get_bbox_patch().set(fc="black", alpha=0.7, edgecolor='cyan')
+
+
     return fig
+
 
 
 def print_summary(v_opt, a_lon_opt, a_lat_opt, vehicle, lap_time_seconds, track_length):
