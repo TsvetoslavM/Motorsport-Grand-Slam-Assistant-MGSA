@@ -341,6 +341,29 @@ lap_time_seconds = float(sol.value(lap_time))
 track_length = np.sum(ds_array)
 
 # ═══════════════════════════════════════════════════════════════
+# 💾 SAVE OPTIMAL TRAJECTORY TO CSV
+# ═══════════════════════════════════════════════════════════════
+# Compute absolute coordinates of the optimal trajectory
+x_opt = x_center + n_opt * normals[:, 0]
+y_opt = y_center + n_opt * normals[:, 1]
+
+# Create dataframe
+opt_df = pd.DataFrame({
+    "x_m": x_opt,
+    "y_m": y_opt,
+    "n_offset_m": n_opt,
+    "velocity_mps": v_opt,
+    "a_longitudinal_mps2": a_lon_opt,
+    "a_lateral_mps2": a_lat_opt,
+    "curvature_1pm": curvature,
+    "ds_m": ds_array
+})
+
+# Save to CSV
+opt_df.to_csv("optiline.csv", index=False)
+print("\n✅ Optimal trajectory saved as 'optiline.csv'!")
+
+# ═══════════════════════════════════════════════════════════════
 # 📋 PRINT SUMMARY
 # ═══════════════════════════════════════════════════════════════
 print_summary(

@@ -177,159 +177,150 @@ def add_constraints(
             # ========================================================================
             # CHICANE HANDLING: Special strategy for S-curves
             # ========================================================================
+            # CHICANE HANDLING: Smooth S-turns
             if is_chicane:
                 chi_seg1, chi_seg2 = chicanes[chicane_idx]
                 seg_idx = segments.index((s0, s1))
-                
-                # Get both corner segments
+
+                # Get both corner segments and indices
                 seg1_start, seg1_end = segments[chi_seg1]
                 seg2_start, seg2_end = segments[chi_seg2]
                 seg1_indices = list(range(seg1_start, seg1_end + 1))
                 seg2_indices = list(range(seg2_start, seg2_end + 1))
-                
-                # Determine directions
+
+                # Apex detection (index in global track indexing)
+                apex_idx_1 = max(seg1_indices, key=lambda i: abs_curv[i])
+                apex_idx_2 = max(seg2_indices, key=lambda i: abs_curv[i])
+
+                apex_pos1 = seg1_indices.index(apex_idx_1)
+                apex_pos2 = seg2_indices.index(apex_idx_2)
+
+                # Average curvature sign -> corner direction
                 seg1_curv_avg = sum(curv_signed[i] for i in seg1_indices) / len(seg1_indices)
                 seg2_curv_avg = sum(curv_signed[i] for i in seg2_indices) / len(seg2_indices)
                 is_first_left = seg1_curv_avg > 0
                 is_second_left = seg2_curv_avg > 0
-                
-                if seg_idx == chi_seg1:
-                    # ================================================================
-                    # FIRST CORNER: Tighter apex with diagonal exit
-                    # ================================================================
-                    # Find apex of first corner
-                    apex_idx_1 = max(seg1_indices, key=lambda i: abs_curv[i])
-                    apex_pos_1 = seg1_indices.index(apex_idx_1)
-                    
-                    for idx, i in enumerate(seg1_indices):
-                        progress = idx / max(1, len(seg1_indices) - 1)
-                        
-                        if idx <= apex_pos_1:
-                            # Entry phase: outside to apex
-                            apex_progress = idx / max(1, apex_pos_1)
-                            
-                            if is_first_left:
-                                # Left turn: outside (right) to inside (left)
-                                target = -0.75 + 1.55 * apex_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
-                            else:
-                                # Right turn: outside (left) to inside (right)
-                                target = 0.75 - 1.55 * apex_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
+
+                # Define numeric lateral targets (tweak these scalars if needed)
+                outside_mag = 0.90   # how far to start from the outside
+                apex_inside_mag = 0.60  # how deep to the inside at apex
+                exit_wide_mag = 0.95  # how wide on exit of second corner
+
+                # Determine signed target numbers: positive => left-side targets, negative => right-side targets
+                def signed_outside(is_left):
+                    return -outside_mag if is_left else outside_mag
+
+                def signed_apex_inside(is_left):
+                    return apex_inside_mag if is_left else -apex_inside_mag
+
+                def signed_exit_outside(is_left):
+                    return exit_wide_mag if not is_left else -exit_wide_mag  # exit is opposite sign to inside
+
+                # ---------- FIRST SEGMENT (entry -> apex -> exit toward straight)
+                for idx, i in enumerate(seg1_indices):
+                    # progress 0..1 relative to this segment
+                    progress = idx / max(1, len(seg1_indices) - 1)
+
+                    if idx <= apex_pos1:
+                        # ENTRY: move from outside to inside at apex
+                        entry_progress = idx / max(1, apex_pos1)
+                        start_t = signed_outside(is_first_left)       # outside starting position
+                        end_t = signed_apex_inside(is_first_left)     # inside at apex
+                        target = start_t + (end_t - start_t) * entry_progress
+                    else:
+                        # EXIT from apex -> aim toward the straightline connection (intermediate diagonal)
+                        exit_progress = (idx - apex_pos1) / max(1, len(seg1_indices) - 1 - apex_pos1)
+                        # we aim to move from inside (apex) back toward a neutral/diagonal approach value (~0)
+                        # but will compute exact connection later for transition indices; here bias toward center
+                        target = signed_apex_inside(is_first_left) + (0.0 - signed_apex_inside(is_first_left)) * exit_progress * 0.9
+
+                    # apply using same mapping as your code (positive -> w_left lower bound, negative -> w_right upper bound)
+                    if target > 0:
+                        opti.subject_to(n[i] >= target * w_left[i])
+                    else:
+                        opti.subject_to(n[i] <= target * w_right[i])
+
+                # ---------- SECOND SEGMENT (approach -> apex -> track out)
+                for idx, i in enumerate(seg2_indices):
+                    progress = idx / max(1, len(seg2_indices) - 1)
+                    # For second corner we want to approach apex along the straightline; use a softer entry toward apex
+                    if idx <= apex_pos2:
+                        # entry from the straightline toward apex
+                        entry_progress = idx / max(1, apex_pos2)
+                        # entry start will be filled by the straightline interpolation (computed lower)
+                        # default start value before interpolation: signed_outside(second) (safe fallback)
+                        start_t = signed_outside(is_second_left)
+                        end_t = signed_apex_inside(is_second_left)
+                        target = start_t + (end_t - start_t) * (0.2 + 0.8 * entry_progress)  # bias slightly inside early
+                    else:
+                        # exit: from apex to full outside for good exit
+                        exit_progress = (idx - apex_pos2) / max(1, len(seg2_indices) - 1 - apex_pos2)
+                        start_t = signed_apex_inside(is_second_left)
+                        end_t = signed_exit_outside(is_second_left)
+                        target = start_t + (end_t - start_t) * (exit_progress ** 1.15)  # slightly nonlinear opening
+
+                    if target > 0:
+                        opti.subject_to(n[i] >= target * w_left[i])
+                    else:
+                        opti.subject_to(n[i] <= target * w_right[i])
+
+                # ---------- STRAIGHT LINE CONNECTION BETWEEN APEX1 AND APEX2 (REVISED)
+                # Force a nearly geometric straight line across transition
+                transition_start = (seg1_end + 1) % N
+                transition_end = (seg2_start - 1) % N
+
+                inter_indices = []
+                j = transition_start
+                while True:
+                    if j == seg2_start or j == (seg2_start % N):
+                        break
+                    inter_indices.append(j)
+                    j = (j + 1) % N
+                    if len(inter_indices) > N:
+                        break
+
+                if len(inter_indices) > 0:
+                    # compute pure linear interpolation of lateral offset between apex1 and apex2
+                    # regardless of curvature in that zone
+                    start_val = signed_apex_inside(is_first_left) * 0.35
+                    end_val   = signed_apex_inside(is_second_left) * 0.35
+
+                    for tpos, idx_global in enumerate(inter_indices):
+                        frac = tpos / max(1, len(inter_indices) - 1)
+
+                        # strict linear interpolation (straight path)
+                        interp_target = start_val + (end_val - start_val) * frac
+
+                        # ignore curvature (do NOT damp by curvature anymore)
+                        # small smoothing near edges to avoid jumps
+                        if frac < 0.15:
+                            interp_target = start_val + (interp_target - start_val) * (frac / 0.15)
+                        elif frac > 0.85:
+                            interp_target = interp_target + (end_val - interp_target) * ((frac - 0.85) / 0.15)
+
+                        if interp_target > 0:
+                            opti.subject_to(n[idx_global] >= interp_target * w_left[idx_global])
                         else:
-                            # Exit phase: apex to outside of second corner (diagonal cut)
-                            exit_progress = (idx - apex_pos_1) / max(1, len(seg1_indices) - 1 - apex_pos_1)
-                            
-                            if is_first_left and not is_second_left:
-                                # Left-right chicane: from left apex, cut diagonally to right
-                                target = 0.8 - 1.55 * exit_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
-                            elif not is_first_left and is_second_left:
-                                # Right-left chicane: from right apex, cut diagonally to left
-                                target = -0.8 + 1.55 * exit_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
-                    
-                    # ================================================================
-                    # TRANSITION ZONE: Maintain diagonal cut
-                    # ================================================================
-                    transition_start = (seg1_end + 1) % N
-                    transition_len = (seg2_start - transition_start) % N
-                    
-                    for j in range(min(transition_len, 15)):
-                        trans_idx = (transition_start + j) % N
-                        trans_progress = j / max(1, min(transition_len, 15) - 1)
-                        
-                        # Continue diagonal positioning
-                        if is_first_left and not is_second_left:
-                            # Continue cutting toward right (outside of second left turn)
-                            target = 0.75 - 1.5 * trans_progress
-                            if target > 0:
-                                opti.subject_to(n[trans_idx] >= target * w_left[trans_idx])
-                            else:
-                                opti.subject_to(n[trans_idx] <= target * w_right[trans_idx])
-                        elif not is_first_left and is_second_left:
-                            # Continue cutting toward left (outside of second right turn)
-                            target = -0.75 + 1.5 * trans_progress
-                            if target > 0:
-                                opti.subject_to(n[trans_idx] >= target * w_left[trans_idx])
-                            else:
-                                opti.subject_to(n[trans_idx] <= target * w_right[trans_idx])
-                
-                elif seg_idx == chi_seg2:
-                    # ================================================================
-                    # SECOND CORNER: Hit apex then track out
-                    # ================================================================
-                    apex_idx_2 = max(seg2_indices, key=lambda i: abs_curv[i])
-                    apex_pos_2 = seg2_indices.index(apex_idx_2)
-                    
-                    # Use mid-apex position (around 60% through)
-                    mid_apex_pos = int(0.6 * len(seg2_indices))
-                    
-                    for idx, i in enumerate(seg2_indices):
-                        if idx <= mid_apex_pos:
-                            # Entry phase: outside to apex
-                            entry_progress = idx / max(1, mid_apex_pos)
-                            
-                            if is_second_left:
-                                # Left turn: outside (right) to inside (left)
-                                target = -0.75 + 1.55 * entry_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
-                            else:
-                                # Right turn: outside (left) to inside (right)
-                                target = 0.75 - 1.55 * entry_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
-                        else:
-                            # Exit phase: apex to outside for maximum exit
-                            exit_progress = (idx - mid_apex_pos) / max(1, len(seg2_indices) - 1 - mid_apex_pos)
-                            
-                            if is_second_left:
-                                # Left turn: inside (left) to outside (right)
-                                target = 0.8 - 1.7 * exit_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
-                            else:
-                                # Right turn: inside (right) to outside (left)
-                                target = -0.8 + 1.7 * exit_progress
-                                if target > 0:
-                                    opti.subject_to(n[i] >= target * w_left[i])
-                                else:
-                                    opti.subject_to(n[i] <= target * w_right[i])
-                
-                # Speed management for chicanes: prioritize momentum
-                # Very lenient to allow straightlining
-                max_corner_curv = max(abs_curv[i] for i in seg_indices)
-                if max_corner_curv > 0.015:
-                    for i in seg_indices:
+                            opti.subject_to(n[idx_global] <= interp_target * w_right[idx_global])
+
+
+                # ---------- SPEED MANAGEMENT BETWEEN APEXES (lenient to favor connecting line)
+                # Allow slightly higher corner speeds for shallow S-turns to favor momentum
+                max_corner_curv = max(abs_curv[i] for i in seg1_indices + seg2_indices)
+                if max_corner_curv > 0.012:
+                    for i in (seg1_indices + seg2_indices):
                         k = abs(float(curvature[i]))
-                        if k > 0.01:
+                        if k > 0.005:
                             F_normal_est = vehicle.mass_kg * vehicle.gravity
-                            a_lat_max = 0.98 * vehicle.mu_friction * F_normal_est / vehicle.mass_kg
+                            a_lat_max = 0.95 * vehicle.mu_friction * F_normal_est / vehicle.mass_kg
                             R = 1.0 / (k + 1e-6)
                             v_corner_max = ca.sqrt(a_lat_max * R)
-                            opti.subject_to(v[i] <= v_corner_max * 1.35)  # Very lenient
+                            opti.subject_to(v[i] <= v_corner_max * 1.25)
+
+
             
             # ========================================================================
-            # If corner is MORE than 120 degrees: Use progressive racing line
+            # If corner is MORE than 90 degrees: Use progressive racing line
             # ========================================================================
             elif total_angle_deg > 90.0:
                 # Find apex (maximum curvature point)
