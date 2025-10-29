@@ -46,14 +46,14 @@ def add_constraints(
         denom = 1.0 - kappa_center * n[i]
         denom = ca.fmax(denom, 1e-3)
         kappa_path = kappa_center / denom
-        a_lat[i] = (v[i] ** 4) * (kappa_path ** 2)
+        a_lat[i] = v[i] ** 2 * kappa_path
 
     # 5) Combined traction circle (ellipse)
     for i in range(N):
         F_normal = vehicle.mass_kg * (vehicle.gravity + vehicle.k_aero() * v[i] ** 2)
         a_max_total = vehicle.mu_friction * F_normal / vehicle.mass_kg
         a_max_total_sq = a_max_total ** 2
-        opti.subject_to(a_lon[i] ** 2 + a_lat[i] <= a_max_total_sq)
+        opti.subject_to(a_lon[i]**2 + a_lat[i]**2 <= a_max_total_sq)
 
     # 6) Power constraints with slack
     for i in range(N):
