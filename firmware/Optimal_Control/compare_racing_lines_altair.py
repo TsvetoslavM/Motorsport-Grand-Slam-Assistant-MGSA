@@ -62,7 +62,7 @@ def read_and_prepare(lines):
     return pd.concat(dfs_interp, ignore_index=True)
 
 def load_track_edges(track_csv):
-    df = pd.read_csv(track_csv, comment="#")
+    df = pd.read_csv(track_csv, comment="#", names=["x_m","y_m","w_tr_right_m","w_tr_left_m"])
     x = df['x_m'].values
     y = df['y_m'].values
     dx = np.gradient(x)

@@ -49,7 +49,7 @@ vehicle = VehicleParams()
 # 📊 LOAD TRACK DATA
 # ═══════════════════════════════════════════════════════════════
 try:
-    track = pd.read_csv("Turn_1.csv", comment="#", names=["x_m","y_m","w_tr_right_m","w_tr_left_m"])
+    track = pd.read_csv("Track.csv", comment="#", names=["x_m","y_m","w_tr_right_m","w_tr_left_m"])
 except:
     print("Warning: Could not find Turn_1.csv, using synthetic track")
     theta = np.linspace(0, 2*np.pi, 100)
