@@ -85,3 +85,11 @@ python -m firmware.curves
 ```
 
 ---
+
+### 6. Visualization compare of lines
+
+```bash
+python firmware/Optimal_Control/compare_racing_lines_altair.py --inputs templates/outline_raceline.csv "Optimla line" firmware/Optimal_Control/optiline.csv "My line" --track_csv firmware/Optimal_Control/Track.csv  --output_html comparison_altair.html
+```
+
+---
