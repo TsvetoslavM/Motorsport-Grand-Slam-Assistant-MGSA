@@ -80,7 +80,51 @@ def load_track_edges(track_csv):
     right_df = pd.DataFrame({'x': x_right, 'y': y_right})
     return left_df, right_df
 
+def add_delay_info(bigdf, base_label):
+    """Add delay information relative to the base (first) line"""
+    # Create pivot table for time at each distance
+    pivot = bigdf.pivot(index='s_m', columns='label', values='time_s').sort_index().interpolate()
+    base_times = pivot[base_label]
+    
+    # Calculate delays for each line
+    delay_data = []
+    for label in pivot.columns:
+        if label != base_label:
+            delays = pivot[label] - base_times
+            delay_data.append(pd.DataFrame({
+                's_m': pivot.index,
+                'label': label,
+                'delay_s': delays
+            }))
+    
+    if delay_data:
+        delay_df = pd.concat(delay_data, ignore_index=True)
+        # Merge delays back into bigdf
+        bigdf = bigdf.merge(delay_df, on=['s_m', 'label'], how='left')
+        # For the base label, delay is 0
+        bigdf.loc[bigdf['label'] == base_label, 'delay_s'] = 0.0
+    else:
+        bigdf['delay_s'] = 0.0
+    
+    return bigdf
+
+def format_time_display(seconds):
+    """Format seconds as MM:SS.SS"""
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return f"{minutes}:{secs:05.2f}"
+
 def create_track_overlay(bigdf, left_edge=None, right_edge=None):
+    # Add formatted columns for tooltips
+    bigdf['Speed'] = bigdf['speed_kmh'].apply(lambda x: f"{x:.2f} km/h")
+    bigdf['Time'] = bigdf['time_s'].apply(format_time_display)
+    bigdf['Distance'] = bigdf['s_m'].apply(lambda x: f"{x:.2f} m")
+    
+    # Format delay with +/- sign
+    bigdf['Delay'] = bigdf['delay_s'].apply(
+        lambda x: f"{x:+.2f} sec" if pd.notna(x) and x != 0 else "0.00 sec (reference)"
+    )
+    
     elements = []
     # Draw left and right edges as ordered lines, no fills
     if left_edge is not None:
@@ -99,14 +143,16 @@ def create_track_overlay(bigdf, left_edge=None, right_edge=None):
                 x='x', y='y', order='index:Q'
             )
         )
+    
     base = alt.Chart(bigdf).mark_line().encode(
         x=alt.X('x_m', axis=alt.Axis(title='x_m')),
         y=alt.Y('y_m', axis=alt.Axis(title='y_m')),
         color=alt.Color('label:N', title='Line'),
         detail='label',
         order='index',
-        tooltip=['label', 'speed_kmh', 'x_m', 'y_m', 's_m']
+        tooltip=['label:N', 'Speed:N', 'Distance:N', 'Time:N', 'Delay:N']
     )
+    
     firsts = bigdf.loc[bigdf['index'] == 0]
     start_pts = alt.Chart(firsts).mark_point(filled=True, color='lime', stroke='black', size=70).encode(
         x='x_m', y='y_m', tooltip=['label']
@@ -116,15 +162,35 @@ def create_track_overlay(bigdf, left_edge=None, right_edge=None):
     return chart
 
 def create_speed_vs_distance(bigdf):
+    # Add formatted columns
+    bigdf['Speed'] = bigdf['speed_kmh'].apply(lambda x: f"{x:.2f} km/h")
+    bigdf['Distance'] = bigdf['s_m'].apply(lambda x: f"{x:.2f} m")
+    bigdf['Delay'] = bigdf['delay_s'].apply(
+        lambda x: f"{x:+.2f} sec" if pd.notna(x) and x != 0 else "0.00 sec (reference)"
+    )
+    
     base = alt.Chart(bigdf).encode(
         x=alt.X('s_m', title='Distance [m]'), color='label:N')
-    lines = base.mark_line().encode(y=alt.Y('speed_kmh', title='Speed [km/h]'), tooltip=['label', 's_m', 'speed_kmh'])
+    lines = base.mark_line().encode(
+        y=alt.Y('speed_kmh', title='Speed [km/h]'), 
+        tooltip=['label:N', 'Distance:N', 'Speed:N', 'Delay:N']
+    )
     return lines.properties(width=350, height=200, title='Speed vs Distance')
 
 def create_time_vs_distance(bigdf):
+    # Add formatted columns
+    bigdf['Time'] = bigdf['time_s'].apply(format_time_display)
+    bigdf['Distance'] = bigdf['s_m'].apply(lambda x: f"{x:.2f} m")
+    bigdf['Delay'] = bigdf['delay_s'].apply(
+        lambda x: f"{x:+.2f} sec" if pd.notna(x) and x != 0 else "0.00 sec (reference)"
+    )
+    
     base = alt.Chart(bigdf).encode(
         x=alt.X('s_m', title='Distance [m]'), color='label:N')
-    lines = base.mark_line().encode(y=alt.Y('time_s', title='Cumulative time [s]'), tooltip=['label', 's_m', 'time_s'])
+    lines = base.mark_line().encode(
+        y=alt.Y('time_s', title='Cumulative time [s]'), 
+        tooltip=['label:N', 'Distance:N', 'Time:N', 'Delay:N']
+    )
     return lines.properties(width=350, height=200, title='Cumulative Time vs Distance')
 
 def create_delta_time_vs_distance(bigdf, base_label):
@@ -133,9 +199,16 @@ def create_delta_time_vs_distance(bigdf, base_label):
     delta_df = pivot.subtract(base, axis=0).reset_index()
     melt = delta_df.melt(id_vars=['s_m'], var_name='label', value_name='delta_time_s')
     melt = melt[melt['label'] != base_label]
+    
+    # Add formatted columns
+    melt['Distance'] = melt['s_m'].apply(lambda x: f"{x:.2f} m")
+    melt['Delay'] = melt['delta_time_s'].apply(lambda x: f"{x:+.2f} sec")
+    
     base_chart = alt.Chart(melt).mark_line().encode(
-        x=alt.X('s_m', title='Distance [m]'), y=alt.Y('delta_time_s', title=f'Δ time to {base_label} [s]'),
-        color='label:N', tooltip=['label', 's_m', 'delta_time_s']
+        x=alt.X('s_m', title='Distance [m]'), 
+        y=alt.Y('delta_time_s', title=f'Δ time to {base_label} [s]'),
+        color='label:N', 
+        tooltip=['label:N', 'Distance:N', 'Delay:N']
     )
     zero_line = alt.Chart(pd.DataFrame({'y': [0.0]})).mark_rule(color='white', opacity=0.5).encode(y='y')
     return (base_chart + zero_line).properties(width=350, height=200, title='Delta Time vs Distance')
@@ -163,9 +236,14 @@ def main():
     lines = list(zip(args.inputs[0::2], args.inputs[1::2]))
     bigdf = read_and_prepare(lines)
     base_label = lines[0][1]
+    
+    # Add delay information relative to first line
+    bigdf = add_delay_info(bigdf, base_label)
+    
     left_edge = right_edge = None
     if args.track_csv:
         left_edge, right_edge = load_track_edges(args.track_csv)
+    
     c1 = create_track_overlay(bigdf, left_edge, right_edge)
     c2 = create_speed_vs_distance(bigdf)
     c3 = create_time_vs_distance(bigdf)
