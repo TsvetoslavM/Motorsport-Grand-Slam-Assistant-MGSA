@@ -618,6 +618,45 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
                     if ds.size == v_avg.size and ds.size > 0:
                         dt[1:] = ds / v_avg
                     cum_time = np.cumsum(dt)
+                else:
+                    # Fallback: compute arc lengths directly here
+                    dx = np.diff(rx)
+                    dy = np.diff(ry)
+                    ds_local = np.sqrt(dx*dx + dy*dy)
+                    v0 = np.maximum(vopt_arr[:-1], 1e-3)
+                    v1 = np.maximum(vopt_arr[1:], 1e-3)
+                    v_avg = 0.5 * (v0 + v1)
+                    dt = np.zeros(rp.shape[0])
+                    if ds_local.size == v_avg.size and ds_local.size > 0:
+                        dt[1:] = ds_local / v_avg
+                    cum_time = np.cumsum(dt)
+
+            # If optimal speed is available, export raceline CSV alongside HTML
+            try:
+                import os
+                import pandas as pd
+                if have_vopt:
+                    # Ensure time_s exists
+                    if cum_time is None or cum_time.size != rp.shape[0]:
+                        # Build a simple time using per-segment dt = ds / v_i
+                        dx = np.diff(rx)
+                        dy = np.diff(ry)
+                        ds_local = np.sqrt(dx*dx + dy*dy)
+                        v_local = np.maximum(vopt_arr[1:], 1e-3)
+                        dt = np.concatenate(([0.0], ds_local / v_local))
+                        cum_time = np.cumsum(dt)
+                    speed_kmh = vopt_arr * 3.6
+                    out_csv = os.path.splitext(output_html)[0] + "_raceline.csv"
+                    df_out = pd.DataFrame({
+                        "x_m": rx.astype(float),
+                        "y_m": ry.astype(float),
+                        "speed_kmh": speed_kmh.astype(float),
+                        "time_s": cum_time.astype(float),
+                    })
+                    df_out.to_csv(out_csv, index=False)
+                    # Optional: silent success
+            except Exception as e:
+                print(f"Failed to export raceline CSV: {e}")
 
             def _format_time_mm_ss_cs(seconds: float) -> str:
                 if not np.isfinite(seconds) or seconds < 0:

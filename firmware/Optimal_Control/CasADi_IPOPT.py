@@ -267,7 +267,7 @@ v_init = np.zeros(N)
 for i in range(N):
     abs_curv = abs(curvature[i])
     if abs_curv < 1e-4:
-        v_init[i] = 70.0
+        v_init[i] = 120.0
     else:
         a_lat_available = vehicle.a_lat_max
         v_corner = np.sqrt(a_lat_available / (abs_curv + 1e-6))
@@ -347,16 +347,19 @@ track_length = np.sum(ds_array)
 x_opt = x_center + n_opt * normals[:, 0]
 y_opt = y_center + n_opt * normals[:, 1]
 
-# Create dataframe
+# Compute cumulative time at the start of each segment (t[0] = 0)
+eps = 1e-6
+time_s = np.cumsum(np.concatenate(([0.0], ds_array[:-1] / np.maximum(v_opt[:-1], eps))))
+
+# Convert speed to km/h
+speed_kmh = v_opt * 3.6
+
+# Create dataframe with only required columns
 opt_df = pd.DataFrame({
     "x_m": x_opt,
     "y_m": y_opt,
-    "n_offset_m": n_opt,
-    "velocity_mps": v_opt,
-    "a_longitudinal_mps2": a_lon_opt,
-    "a_lateral_mps2": a_lat_opt,
-    "curvature_1pm": curvature,
-    "ds_m": ds_array
+    "speed_kmh": speed_kmh,
+    "time_s": time_s,
 })
 
 # Save to CSV
