@@ -253,7 +253,7 @@ Max Curvature:
     plt.suptitle("F1 LAP TIME OPTIMIZATION - COMPLETE ANALYSIS", 
                 fontsize=18, fontweight='bold', y=0.995)
     
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.tight_layout()
 
     # ===== HOVER POPUP ON RACING LINE =====
     import mplcursors

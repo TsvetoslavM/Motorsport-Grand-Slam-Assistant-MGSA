@@ -218,31 +218,32 @@ def find_corner_phases(curvature, ds_array, N):
 
 
 def add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N):
-    """Add constraints to force the car to hit the apex of corners AGGRESSIVELY.
-    
-    🔥 MODIFIED: EXTREMELY tight apex constraints - force car to inside kerbs.
-    """
-    
-    for apex_idx in corner_phases['apex']:
+    tol = 0.03  # 5 cm tolerance (примерно) — настрой според размерите на w_left/w_right
+    slack_apex = opti.variable(len(corner_phases['apex']))  # ако искаш slack
+    opti.set_initial(slack_apex, 0.0)
+    opti.subject_to(slack_apex >= 0)
+    slack_weight = 1000.0  # penalize slack in objective (ако го ползваш)
+
+    single_apices = extract_single_apex_indices(curvature, corner_phases)
+    for idx_i, apex_idx in enumerate(single_apices):
         if abs(curvature[apex_idx]) < 0.01:
             continue
-        
-        # 🔥🔥🔥 ULTRA-AGGRESSIVE APEX: Force to the very inside edge
-        if curvature[apex_idx] > 0:  # Left turn
-            # Force to be RIGHT AT the left edge (negative side)
-            # Target the innermost 5% of track width!
-            opti.subject_to(n[apex_idx] >= -w_left[apex_idx] * 0.95)  # Almost touching inside
-            opti.subject_to(n[apex_idx] <= -w_left[apex_idx] * 0.70)  # Must be inside
-        else:  # Right turn
-            # Force to be RIGHT AT the right edge (positive side)
-            opti.subject_to(n[apex_idx] <= w_right[apex_idx] * 0.95)  # Almost touching inside
-            opti.subject_to(n[apex_idx] >= w_right[apex_idx] * 0.70)  # Must be inside
+
+        if curvature[apex_idx] > 0:  # left turn
+            apex_target = w_left[apex_idx] * 0.95
+        else:
+            apex_target = -w_right[apex_idx] * 0.95
+
+        # жестко но с толеранс: apex_target +/- tol, допускаме slack_apex[idx_i]
+        opti.subject_to(n[apex_idx] >= apex_target - tol - slack_apex[idx_i])
+        opti.subject_to(n[apex_idx] <= apex_target + tol + slack_apex[idx_i])
+
 
 
 def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_phases, ds_array, N):
     """Add cost terms to encourage proper racing line geometry: outside-apex-outside.
     
-    🔥 MODIFIED: Stronger apex attraction for tighter racing line.
+    🔥🔥🔥 MAXIMUM AGGRESSION: Ultra-strong apex attraction for knife-edge racing line.
     """
     
     racing_line_cost = 0
@@ -266,17 +267,17 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
             
             racing_line_cost += entry_penalty * 100.0
         
-        # 🔥🔥🔥 APEX PHASE: EXTREMELY strong pull to inside edge
+        # 🔥🔥🔥 APEX PHASE: NUCLEAR-LEVEL pull to inside edge
         elif i in corner_phases['apex']:
             if is_left_turn:
-                # Target: Almost touching the left inside kerb
-                apex_target = -w_left[i] * 0.90  # Was 0.75, now 0.90!
+                # Target: KISSING the left inside kerb
+                apex_target = w_left[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95! EXTREME!
             else:
-                # Target: Almost touching the right inside kerb
-                apex_target = w_right[i] * 0.90  # Was 0.75, now 0.90!
+                # Target: KISSING the right inside kerb
+                apex_target = -w_right[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95! EXTREME!
             
             apex_cost = (n[i] - apex_target) ** 2
-            racing_line_cost += apex_cost * 1000.0  # Was 500, now 1000 (2x stronger!)
+            racing_line_cost += apex_cost * 2000.0  # 🔥🔥 Was 1000, now 2000 (4x from original!)
         
         # EXIT PHASE: penalize being on the inside
         elif i in corner_phases['exit']:
@@ -290,6 +291,30 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
             racing_line_cost += exit_penalty * 100.0
     
     return racing_line_cost
+
+def extract_single_apex_indices(curvature, corner_phases):
+    # Връща един apex index за всеки групиран апекс сегмент (максимална крива)
+    apex_list = sorted(set(corner_phases.get('apex', [])))
+    if not apex_list:
+        return []
+
+    N = len(curvature)
+    groups = []
+    current = [apex_list[0]]
+    for idx in apex_list[1:]:
+        prev = current[-1]
+        if idx == (prev + 1) % N:
+            current.append(idx)
+        else:
+            groups.append(current)
+            current = [idx]
+    groups.append(current)
+
+    apices = []
+    for g in groups:
+        max_idx = max(g, key=lambda i: abs(curvature[i]))
+        apices.append(max_idx)
+    return apices
 
 
 def add_constraints(
@@ -317,12 +342,20 @@ def add_constraints(
     corner_phases = find_corner_phases(curvature, ds_array, N)
 
     # 1) Track boundaries
-    boundary_margin = 0.1
-    for i in range(N):
-        opti.subject_to(n[i] >= -w_left[i] + boundary_margin)
-        opti.subject_to(n[i] <= w_right[i] - boundary_margin)
+    boundary_margin_default = 0.1
+    boundary_margin_apex = 0.0  # позволи достигане до кърба на апекса
+    single_apices = extract_single_apex_indices(curvature, corner_phases)
 
-    # 1b) 🔥 Add AGGRESSIVE apex constraints to force tighter racing line
+    for i in range(N):
+        if i in single_apices:
+            bm = boundary_margin_apex
+        else:
+            bm = boundary_margin_default
+        opti.subject_to(n[i] >= -w_left[i] + bm)
+        opti.subject_to(n[i] <= w_right[i] - bm)
+
+
+    # 1b) 🔥🔥🔥 Add EXTREME apex constraints to force MAXIMUM inside trajectory
     add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N)
 
     # 2) Velocity continuity (trapezoidal integration for dt)
@@ -368,27 +401,37 @@ def add_constraints(
         opti.subject_to(a_lon[i] <= vehicle.a_accel_max)
 
     # 8) Path smoothness with adaptive limits
+    # Path smoothness adaptive around apex
+    single_apices = extract_single_apex_indices(curvature, corner_phases)
+
     for i in range(N):
         i_next = (i + 1) % N
         dn = n[i_next] - n[i]
-        
-        # More freedom in corners, less in straights
-        if abs(curvature[i]) > 0.02 or abs(curvature[i_next]) > 0.02:
-            max_dn = 2.0  # Allow bigger changes in corners
+
+        if i in single_apices or i_next in single_apices:
+            max_dn = 4.0   # позволи бърза промяна около апекса
         else:
-            max_dn = 0.8  # Tight on straights
-            
+            if abs(curvature[i]) > 0.02 or abs(curvature[i_next]) > 0.02:
+                max_dn = 2.0
+            else:
+                max_dn = 0.8
+
         opti.subject_to(dn >= -max_dn)
         opti.subject_to(dn <= max_dn)
 
-    # Second difference for curvature smoothness
-    max_d2n = 0.8
+    # d2n
     for i in range(N):
         i_prev = (i - 1) % N
         i_next = (i + 1) % N
+        if i in single_apices or i_prev in single_apices or i_next in single_apices:
+            max_d2n_local = 2.5
+        else:
+            max_d2n_local = 0.8
         d2n = n[i_next] - 2 * n[i] + n[i_prev]
-        opti.subject_to(d2n >= -max_d2n)
-        opti.subject_to(d2n <= max_d2n)
+        opti.subject_to(d2n >= -max_d2n_local)
+        opti.subject_to(d2n <= max_d2n_local)
+
+
 
     # 9) Jerk limits
     max_jerk = 30.0
@@ -409,7 +452,7 @@ def create_objective_with_racing_line(
 ):
     """Create objective function that balances lap time with proper racing line.
     
-    🔥 MODIFIED: Stronger racing line geometry weight for tighter apexes.
+    🔥🔥🔥 MAXIMUM AGGRESSION: Massively increased racing line weight for extreme apexes.
     """
     
     # Primary objective: minimize lap time
@@ -423,7 +466,7 @@ def create_objective_with_racing_line(
     # Penalty for using power slack
     power_slack_penalty = ca.sum1(slack_power ** 2)
     
-    # 🔥 Racing line geometry cost with STRONGER weight
+    # 🔥🔥🔥 Racing line geometry cost with MASSIVE weight increase
     racing_line_cost = add_racing_line_geometry_cost(
         opti, n, curvature, w_left, w_right, corner_phases, ds_array, N
     )
@@ -446,7 +489,7 @@ def create_objective_with_racing_line(
     total_cost = (
         lap_time * 1.0 +                    # Main objective
         power_slack_penalty * 0.001 +       # Small penalty for slack
-        racing_line_cost * 0.0001 +         # 🔥🔥 Was 0.00005, now 0.0001 (10x from original!)
+        racing_line_cost * 0.0002 +         # 🔥🔥🔥 Was 0.0001, now 0.0002 (20x from original!)
         smoothness_cost * 0.000001 +        # Path smoothness
         path_length_cost * 0.0000005        # Straight-line efficiency
     )
@@ -461,7 +504,7 @@ def initialize_with_proper_racing_line(
 ):
     """Initialize optimization variables with proper racing line: outside-apex-outside.
     
-    🔥 MODIFIED: Initialize with tighter apex positions.
+    🔥🔥🔥 MAXIMUM AGGRESSION: Initialize with extreme apex positions.
     """
     
     # Classify corners and phases
@@ -487,12 +530,12 @@ def initialize_with_proper_racing_line(
             else:
                 n_init[i] = -w_left[i] * 0.7  # Left side for right turn
         
-        # 🔥🔥🔥 APEX: RIGHT AT the inside kerb edge!
+        # 🔥🔥🔥 APEX: EXTREME inside kerb position!
         elif i in corner_phases['apex']:
             if is_left_turn:
-                n_init[i] = -w_left[i] * 0.90  # Was 0.75, now 0.90 (almost touching!)
+                n_init[i] = -w_left[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95 (KISSING the kerb!)
             else:
-                n_init[i] = w_right[i] * 0.90  # Was 0.75, now 0.90 (almost touching!)
+                n_init[i] = w_right[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95 (KISSING the kerb!)
         
         # EXIT: outside of corner
         elif i in corner_phases['exit']:
@@ -509,8 +552,35 @@ def initialize_with_proper_racing_line(
             else:
                 n_init[i] = -w_left[i] * 0.5
     
-    # Smooth the racing line
-    n_init = gaussian_filter1d(n_init, sigma=8, mode='wrap')
+    # Извлечи единични апекси
+    single_apices = extract_single_apex_indices(curvature, corner_phases)
+
+    # Направи локален Gaussian pull към апекса (остър апекс)
+    n_init_before_smooth = n_init.copy()
+    for apex_idx in single_apices:
+        if abs(curvature[apex_idx]) < 0.01:
+            continue
+
+        # целева позиция на апекса
+        if curvature[apex_idx] > 0:  # left turn
+            apex_target = w_left[apex_idx] * 0.95
+        else:
+            apex_target = -w_right[apex_idx] * 0.95
+
+        # Параметри: small sigma => по-остър pull (тест: 2..4)
+        sigma_idx = 1.0
+        window = int(max(3, round(sigma_idx * 4)))  # обхват около апекса
+
+        # Apply gaussian influence on indices around apex
+        for offset in range(-window, window+1):
+            i = (apex_idx + offset) % N
+            influence = np.exp(-0.5 * (offset / sigma_idx)**2)
+            # Миксваме текущата стойност с целта, силно локално
+            n_init_before_smooth[i] = (1.0 - influence) * n_init_before_smooth[i] + influence * apex_target
+
+    # По-слаб глобален smooth: sigma малък (или го махни)
+    n_init = gaussian_filter1d(n_init_before_smooth, sigma=2, mode='wrap')
+
     
     # Initialize velocity
     v_init = np.full(N, vehicle.v_max)
