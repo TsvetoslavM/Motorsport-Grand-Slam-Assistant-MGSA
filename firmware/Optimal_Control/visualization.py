@@ -246,7 +246,7 @@ Max Curvature:
         ax5.text(bar.get_x() + bar.get_width()/2., height,
                 f'{time:.2f}s\n{speed:.0f}km/h',
                 ha='center', va='bottom', fontsize=9)
-    ax5.set_ylim([30, 55])
+    ax5.set_ylim([25, 45])
     ax5.grid(True, alpha=0.2, axis='y')
     
     # ===== ЗАГЛАВИЕ =====

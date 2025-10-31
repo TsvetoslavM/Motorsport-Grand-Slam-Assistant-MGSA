@@ -21,7 +21,7 @@ body {
     letter-spacing: .02em;
 }
 .container {
-    max-width: 920px;
+    max-width: 620px;
     margin: 2em auto 3em auto;
     padding: 2em 2.3em 2em 2.3em;
     background: #fff;

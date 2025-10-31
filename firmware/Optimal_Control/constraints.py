@@ -1,5 +1,295 @@
 import casadi as ca
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
+
+
+def classify_corner_types(curvature, ds_array, N):
+    """Classify each segment into corner types based on curvature analysis.
+    
+    Returns:
+        corner_types: dict with keys 'hairpin', 'chicane', 'sweeper', 'tight', 
+                     'kink', 'decreasing', 'increasing', 'complex'
+        Each value is a list of segment indices belonging to that type.
+    """
+    corner_types = {
+        'hairpin': [],
+        'chicane': [],
+        'sweeper': [],
+        'tight': [],
+        'kink': [],
+        'decreasing': [],
+        'increasing': [],
+        'complex': [],
+        'straight': []
+    }
+    
+    # Calculate curvature derivatives
+    curv_derivative = np.zeros(N)
+    for i in range(N):
+        i_next = (i + 1) % N
+        curv_derivative[i] = (curvature[i_next] - curvature[i]) / ds_array[i]
+    
+    # Smooth derivatives
+    curv_derivative = gaussian_filter1d(curv_derivative, sigma=3, mode='wrap')
+    
+    # Threshold values for F1
+    HAIRPIN_CURV = 0.08  # Very tight radius (~12.5m)
+    TIGHT_CURV = 0.05    # Tight 90-degree turn
+    SWEEPER_CURV = 0.02  # Fast sweeper
+    KINK_CURV = 0.005    # Barely noticeable
+    
+    DECREASING_THRESHOLD = 0.001  # Curvature increasing (radius decreasing)
+    INCREASING_THRESHOLD = -0.001  # Curvature decreasing (radius increasing)
+    
+    i = 0
+    while i < N:
+        abs_curv = abs(curvature[i])
+        
+        # STRAIGHT
+        if abs_curv < KINK_CURV:
+            corner_types['straight'].append(i)
+            i += 1
+            continue
+        
+        # KINK - very slight corner
+        if abs_curv < SWEEPER_CURV:
+            corner_types['kink'].append(i)
+            i += 1
+            continue
+        
+        # Find corner extent
+        corner_start = i
+        corner_sign = np.sign(curvature[i])
+        
+        # Continue while same direction and significant curvature
+        while i < N and np.sign(curvature[i]) == corner_sign and abs(curvature[i]) >= KINK_CURV:
+            i += 1
+        
+        corner_end = i - 1
+        corner_length = (corner_end - corner_start + 1) % N
+        
+        if corner_length < 2:
+            i += 1
+            continue
+        
+        # Get corner statistics
+        corner_indices = [(corner_start + j) % N for j in range(corner_length)]
+        corner_curvatures = [abs(curvature[idx]) for idx in corner_indices]
+        max_curv = max(corner_curvatures)
+        avg_curv = np.mean(corner_curvatures)
+        
+        # Check for radius change
+        corner_derivatives = [curv_derivative[idx] for idx in corner_indices]
+        avg_derivative = np.mean(corner_derivatives)
+        
+        # HAIRPIN - very tight, ~180 degrees
+        if max_curv > HAIRPIN_CURV:
+            corner_types['hairpin'].extend(corner_indices)
+        
+        # TIGHT CORNER - 90 degree
+        elif max_curv > TIGHT_CURV:
+            # Check if radius is decreasing or increasing
+            if avg_derivative > DECREASING_THRESHOLD:
+                corner_types['decreasing'].extend(corner_indices)
+            elif avg_derivative < INCREASING_THRESHOLD:
+                corner_types['increasing'].extend(corner_indices)
+            else:
+                corner_types['tight'].extend(corner_indices)
+        
+        # SWEEPER - fast corner
+        elif max_curv > SWEEPER_CURV:
+            corner_types['sweeper'].extend(corner_indices)
+        
+    # Detect CHICANES - alternating direction corners close together
+    chicane_window = 50  # meters
+    for i in range(N):
+        if curvature[i] == 0:
+            continue
+        
+        # Look ahead for opposite curvature
+        distance = 0
+        for j in range(1, 30):
+            idx = (i + j) % N
+            distance += ds_array[(i + j - 1) % N]
+            
+            if distance > chicane_window:
+                break
+            
+            if np.sign(curvature[idx]) == -np.sign(curvature[i]) and abs(curvature[idx]) > SWEEPER_CURV:
+                # Found chicane
+                for k in range(j + 1):
+                    chicane_idx = (i + k) % N
+                    if chicane_idx not in corner_types['chicane']:
+                        corner_types['chicane'].append(chicane_idx)
+                break
+    
+    # Detect COMPLEX - multiple corners in sequence
+    complex_window = 100  # meters
+    for i in range(N):
+        if abs(curvature[i]) < SWEEPER_CURV:
+            continue
+        
+        corner_count = 0
+        distance = 0
+        
+        for j in range(1, 50):
+            idx = (i + j) % N
+            distance += ds_array[(i + j - 1) % N]
+            
+            if distance > complex_window:
+                break
+            
+            if abs(curvature[idx]) > SWEEPER_CURV:
+                corner_count += 1
+        
+        if corner_count > 3:
+            for k in range(min(50, N)):
+                complex_idx = (i + k) % N
+                if abs(curvature[complex_idx]) > SWEEPER_CURV:
+                    if complex_idx not in corner_types['complex']:
+                        corner_types['complex'].append(complex_idx)
+    
+    return corner_types
+
+
+def find_corner_phases(curvature, ds_array, N):
+    """Identify entry, apex, and exit phases of corners for proper racing line.
+    
+    Returns:
+        corner_phases: dict with 'entry', 'apex', 'exit' lists
+    """
+    corner_phases = {
+        'entry': [],
+        'apex': [],
+        'exit': []
+    }
+    
+    # Smooth curvature to find peaks
+    curv_smooth = gaussian_filter1d(np.abs(curvature), sigma=5, mode='wrap')
+    
+    CORNER_THRESHOLD = 0.01
+    
+    i = 0
+    while i < N:
+        if abs(curvature[i]) < CORNER_THRESHOLD:
+            i += 1
+            continue
+        
+        # Found a corner, find its extent
+        corner_start = i
+        corner_sign = np.sign(curvature[i])
+        
+        # Find corner end
+        while i < N and np.sign(curvature[i]) == corner_sign and abs(curvature[i]) >= CORNER_THRESHOLD * 0.5:
+            i += 1
+        
+        corner_end = (i - 1) % N
+        corner_length = (corner_end - corner_start + 1) % N
+        
+        if corner_length < 3:
+            continue
+        
+        # Find apex (max curvature point)
+        corner_indices = [(corner_start + j) % N for j in range(corner_length)]
+        corner_curvatures = [abs(curvature[idx]) for idx in corner_indices]
+        apex_local_idx = np.argmax(corner_curvatures)
+        apex_idx = corner_indices[apex_local_idx]
+        
+        # Define phases
+        entry_length = max(1, apex_local_idx)
+        exit_length = max(1, corner_length - apex_local_idx - 1)
+        
+        # Entry: from corner start to 2 segments before apex
+        for j in range(max(0, apex_local_idx - 2)):
+            entry_idx = (corner_start + j) % N
+            corner_phases['entry'].append(entry_idx)
+        
+        # Apex: apex and 1-2 segments around it
+        for j in range(max(0, apex_local_idx - 1), min(corner_length, apex_local_idx + 2)):
+            apex_idx_current = (corner_start + j) % N
+            corner_phases['apex'].append(apex_idx_current)
+        
+        # Exit: from 2 segments after apex to corner end
+        for j in range(min(corner_length, apex_local_idx + 2), corner_length):
+            exit_idx = (corner_start + j) % N
+            corner_phases['exit'].append(exit_idx)
+    
+    return corner_phases
+
+
+def add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N):
+    """Add constraints to force the car to hit the apex of corners AGGRESSIVELY.
+    
+    🔥 MODIFIED: EXTREMELY tight apex constraints - force car to inside kerbs.
+    """
+    
+    for apex_idx in corner_phases['apex']:
+        if abs(curvature[apex_idx]) < 0.01:
+            continue
+        
+        # 🔥🔥🔥 ULTRA-AGGRESSIVE APEX: Force to the very inside edge
+        if curvature[apex_idx] > 0:  # Left turn
+            # Force to be RIGHT AT the left edge (negative side)
+            # Target the innermost 5% of track width!
+            opti.subject_to(n[apex_idx] >= -w_left[apex_idx] * 0.95)  # Almost touching inside
+            opti.subject_to(n[apex_idx] <= -w_left[apex_idx] * 0.70)  # Must be inside
+        else:  # Right turn
+            # Force to be RIGHT AT the right edge (positive side)
+            opti.subject_to(n[apex_idx] <= w_right[apex_idx] * 0.95)  # Almost touching inside
+            opti.subject_to(n[apex_idx] >= w_right[apex_idx] * 0.70)  # Must be inside
+
+
+def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_phases, ds_array, N):
+    """Add cost terms to encourage proper racing line geometry: outside-apex-outside.
+    
+    🔥 MODIFIED: Stronger apex attraction for tighter racing line.
+    """
+    
+    racing_line_cost = 0
+    
+    for i in range(N):
+        if abs(curvature[i]) < 0.005:  # Skip straights
+            continue
+        
+        is_left_turn = curvature[i] > 0
+        
+        # ENTRY PHASE: penalize being on the inside
+        if i in corner_phases['entry']:
+            if is_left_turn:
+                # Want to be on right side (positive n) on entry
+                # Penalize negative n (left side)
+                entry_penalty = ca.fmax(0, -n[i] - w_left[i] * 0.3) ** 2
+            else:
+                # Want to be on left side (negative n) on entry
+                # Penalize positive n (right side)
+                entry_penalty = ca.fmax(0, n[i] - w_right[i] * 0.3) ** 2
+            
+            racing_line_cost += entry_penalty * 100.0
+        
+        # 🔥🔥🔥 APEX PHASE: EXTREMELY strong pull to inside edge
+        elif i in corner_phases['apex']:
+            if is_left_turn:
+                # Target: Almost touching the left inside kerb
+                apex_target = -w_left[i] * 0.90  # Was 0.75, now 0.90!
+            else:
+                # Target: Almost touching the right inside kerb
+                apex_target = w_right[i] * 0.90  # Was 0.75, now 0.90!
+            
+            apex_cost = (n[i] - apex_target) ** 2
+            racing_line_cost += apex_cost * 1000.0  # Was 500, now 1000 (2x stronger!)
+        
+        # EXIT PHASE: penalize being on the inside
+        elif i in corner_phases['exit']:
+            if is_left_turn:
+                # Want to be on right side (positive n) on exit
+                exit_penalty = ca.fmax(0, -n[i] - w_left[i] * 0.3) ** 2
+            else:
+                # Want to be on left side (negative n) on exit
+                exit_penalty = ca.fmax(0, n[i] - w_right[i] * 0.3) ** 2
+            
+            racing_line_cost += exit_penalty * 100.0
+    
+    return racing_line_cost
 
 
 def add_constraints(
@@ -14,18 +304,26 @@ def add_constraints(
     ds_array,
     curvature,
 ):
-    """Add all problem constraints to the Opti instance.
+    """Add all problem constraints to the Opti instance with corner-type awareness.
 
     Returns:
         a_lat (ca.MX): Vector of lateral acceleration terms used in post-processing.
+        corner_types (dict): Classification of corner types for analysis.
     """
     N = v.shape[0]
+
+    # Classify corner types and phases
+    corner_types = classify_corner_types(curvature, ds_array, N)
+    corner_phases = find_corner_phases(curvature, ds_array, N)
 
     # 1) Track boundaries
     boundary_margin = 0.1
     for i in range(N):
         opti.subject_to(n[i] >= -w_left[i] + boundary_margin)
         opti.subject_to(n[i] <= w_right[i] - boundary_margin)
+
+    # 1b) 🔥 Add AGGRESSIVE apex constraints to force tighter racing line
+    add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N)
 
     # 2) Velocity continuity (trapezoidal integration for dt)
     for i in range(N):
@@ -69,17 +367,22 @@ def add_constraints(
         opti.subject_to(a_lon[i] >= -vehicle.a_brake_max)
         opti.subject_to(a_lon[i] <= vehicle.a_accel_max)
 
-    # 8) Path smoothness (limit change in lateral position and curvature)
-    # Limit per-step lateral offset change to avoid zig-zags
-    max_dn = 1.0
+    # 8) Path smoothness with adaptive limits
     for i in range(N):
         i_next = (i + 1) % N
         dn = n[i_next] - n[i]
+        
+        # More freedom in corners, less in straights
+        if abs(curvature[i]) > 0.02 or abs(curvature[i_next]) > 0.02:
+            max_dn = 2.0  # Allow bigger changes in corners
+        else:
+            max_dn = 0.8  # Tight on straights
+            
         opti.subject_to(dn >= -max_dn)
         opti.subject_to(dn <= max_dn)
 
-    # Additionally bound second difference to enforce smooth curvature of path
-    max_d2n = 0.5
+    # Second difference for curvature smoothness
+    max_d2n = 0.8
     for i in range(N):
         i_prev = (i - 1) % N
         i_next = (i + 1) % N
@@ -87,7 +390,7 @@ def add_constraints(
         opti.subject_to(d2n >= -max_d2n)
         opti.subject_to(d2n <= max_d2n)
 
-    # 9) Jerk limits (change in acceleration)
+    # 9) Jerk limits
     max_jerk = 30.0
     for i in range(N):
         i_next = (i + 1) % N
@@ -97,349 +400,177 @@ def add_constraints(
         opti.subject_to(jerk >= -max_jerk)
         opti.subject_to(jerk <= max_jerk)
 
-    # ============================================================================
-    # Detect corners and apply different strategies based on corner angle
-    # ============================================================================
-    try:
-        # Convert curvature to numeric for analysis
-        abs_curv = [abs(float(curvature[i])) for i in range(N)]
-        curv_signed = [float(curvature[i]) for i in range(N)]
+    return a_lat, corner_types, corner_phases
+
+
+def create_objective_with_racing_line(
+    opti, v, a_lon, slack_power, n, curvature, w_left, w_right, 
+    corner_phases, ds_array, N, vehicle
+):
+    """Create objective function that balances lap time with proper racing line.
+    
+    🔥 MODIFIED: Stronger racing line geometry weight for tighter apexes.
+    """
+    
+    # Primary objective: minimize lap time
+    lap_time = 0
+    for i in range(N):
+        i_next = (i + 1) % N
+        v_avg = 0.5 * (v[i] + v[i_next])
+        dt = ds_array[i] / (v_avg + 1e-3)
+        lap_time += dt
+    
+    # Penalty for using power slack
+    power_slack_penalty = ca.sum1(slack_power ** 2)
+    
+    # 🔥 Racing line geometry cost with STRONGER weight
+    racing_line_cost = add_racing_line_geometry_cost(
+        opti, n, curvature, w_left, w_right, corner_phases, ds_array, N
+    )
+    
+    # Smoothness cost (penalize excessive lateral movement)
+    smoothness_cost = 0
+    for i in range(N):
+        i_next = (i + 1) % N
+        dn = n[i_next] - n[i]
+        smoothness_cost += dn ** 2
+    
+    # Path length cost (shorter path is better, but not at expense of apex)
+    path_length_cost = 0
+    for i in range(N):
+        # Penalize being away from centerline on straights
+        if abs(curvature[i]) < 0.005:
+            path_length_cost += n[i] ** 2
+    
+    # Combined objective
+    total_cost = (
+        lap_time * 1.0 +                    # Main objective
+        power_slack_penalty * 0.001 +       # Small penalty for slack
+        racing_line_cost * 0.0001 +         # 🔥🔥 Was 0.00005, now 0.0001 (10x from original!)
+        smoothness_cost * 0.000001 +        # Path smoothness
+        path_length_cost * 0.0000005        # Straight-line efficiency
+    )
+    
+    opti.minimize(total_cost)
+    
+    return total_cost
+
+
+def initialize_with_proper_racing_line(
+    opti, n, v, a_lon, curvature, ds_array, w_left, w_right, vehicle, N
+):
+    """Initialize optimization variables with proper racing line: outside-apex-outside.
+    
+    🔥 MODIFIED: Initialize with tighter apex positions.
+    """
+    
+    # Classify corners and phases
+    corner_types = classify_corner_types(curvature, ds_array, N)
+    corner_phases = find_corner_phases(curvature, ds_array, N)
+    
+    # Initialize lateral position with racing line logic
+    n_init = np.zeros(N)
+    
+    for i in range(N):
+        abs_curv = abs(curvature[i])
         
-        # Detect corner segments
-        curv_thresh = 0.01
-        is_corner = [1 if c > curv_thresh else 0 for c in abs_curv]
+        if abs_curv < 0.005:  # Straight
+            n_init[i] = 0.0
+            continue
         
-        # Find contiguous corner segments
-        segments = []
-        start = None
-        for i in range(N):
-            if is_corner[i] and start is None:
-                start = i
-            elif not is_corner[i] and start is not None:
-                segments.append((start, i - 1))
-                start = None
-        if start is not None:
-            segments.append((start, N - 1))
+        is_left_turn = curvature[i] > 0
         
-        min_corner_length = 5
-        
-        # ========================================================================
-        # CHICANE DETECTION: Detect S-curves (rapid direction reversals)
-        # ========================================================================
-        chicanes = []
-        for i in range(len(segments)):
-            if i + 1 < len(segments):
-                seg1_start, seg1_end = segments[i]
-                seg2_start, seg2_end = segments[i + 1]
-                
-                # Check if segments are close together
-                gap = (seg2_start - seg1_end - 1) % N
-                if gap < 15:  # Less than 15 points between corners
-                    # Check if they have opposite curvature signs
-                    seg1_curv_avg = sum(curv_signed[j] for j in range(seg1_start, seg1_end + 1)) / max(1, seg1_end - seg1_start + 1)
-                    seg2_curv_avg = sum(curv_signed[j] for j in range(seg2_start, seg2_end + 1)) / max(1, seg2_end - seg2_start + 1)
-                    
-                    if seg1_curv_avg * seg2_curv_avg < 0:  # Opposite signs
-                        chicanes.append((i, i + 1))  # Store segment indices that form chicane
-        
-        for (s0, s1) in segments:
-            seg_indices = list(range(s0, s1 + 1))
-            seg_len = len(seg_indices)
-            
-            if seg_len < min_corner_length:
-                continue
-            
-            # Check if this segment is part of a chicane
-            is_chicane = False
-            chicane_idx = None
-            for chi_idx, (chi_seg1, chi_seg2) in enumerate(chicanes):
-                seg_idx = segments.index((s0, s1))
-                if seg_idx == chi_seg1 or seg_idx == chi_seg2:
-                    is_chicane = True
-                    chicane_idx = chi_idx
-                    break
-            
-            # Calculate total corner angle by integrating curvature over distance
-            total_angle = 0.0
-            for i in seg_indices:
-                total_angle += abs(float(curvature[i])) * float(ds_array[i])
-            
-            # Convert to degrees
-            total_angle_deg = abs(total_angle) * 180.0 / 3.14159265359
-            
-            # Determine corner direction
-            seg_curv_sum = sum(float(curvature[i]) for i in seg_indices)
-            if seg_curv_sum == 0:
-                continue
-            
-            is_left_turn = seg_curv_sum > 0
-            
-            # ========================================================================
-            # CHICANE HANDLING: Special strategy for S-curves
-            # ========================================================================
-            # CHICANE HANDLING: Smooth S-turns
-            if is_chicane:
-                chi_seg1, chi_seg2 = chicanes[chicane_idx]
-                seg_idx = segments.index((s0, s1))
-
-                # Get both corner segments and indices
-                seg1_start, seg1_end = segments[chi_seg1]
-                seg2_start, seg2_end = segments[chi_seg2]
-                seg1_indices = list(range(seg1_start, seg1_end + 1))
-                seg2_indices = list(range(seg2_start, seg2_end + 1))
-
-                # Apex detection (index in global track indexing)
-                apex_idx_1 = max(seg1_indices, key=lambda i: abs_curv[i])
-                apex_idx_2 = max(seg2_indices, key=lambda i: abs_curv[i])
-
-                apex_pos1 = seg1_indices.index(apex_idx_1)
-                apex_pos2 = seg2_indices.index(apex_idx_2)
-
-                # Average curvature sign -> corner direction
-                seg1_curv_avg = sum(curv_signed[i] for i in seg1_indices) / len(seg1_indices)
-                seg2_curv_avg = sum(curv_signed[i] for i in seg2_indices) / len(seg2_indices)
-                is_first_left = seg1_curv_avg > 0
-                is_second_left = seg2_curv_avg > 0
-
-                # Define numeric lateral targets (tweak these scalars if needed)
-                outside_mag = 0.90   # how far to start from the outside
-                apex_inside_mag = 0.60  # how deep to the inside at apex
-                exit_wide_mag = 0.95  # how wide on exit of second corner
-
-                # Determine signed target numbers: positive => left-side targets, negative => right-side targets
-                def signed_outside(is_left):
-                    return -outside_mag if is_left else outside_mag
-
-                def signed_apex_inside(is_left):
-                    return apex_inside_mag if is_left else -apex_inside_mag
-
-                def signed_exit_outside(is_left):
-                    return exit_wide_mag if not is_left else -exit_wide_mag  # exit is opposite sign to inside
-
-                # ---------- FIRST SEGMENT (entry -> apex -> exit toward straight)
-                for idx, i in enumerate(seg1_indices):
-                    # progress 0..1 relative to this segment
-                    progress = idx / max(1, len(seg1_indices) - 1)
-
-                    if idx <= apex_pos1:
-                        # ENTRY: move from outside to inside at apex
-                        entry_progress = idx / max(1, apex_pos1)
-                        start_t = signed_outside(is_first_left)       # outside starting position
-                        end_t = signed_apex_inside(is_first_left)     # inside at apex
-                        target = start_t + (end_t - start_t) * entry_progress
-                    else:
-                        # EXIT from apex -> aim toward the straightline connection (intermediate diagonal)
-                        exit_progress = (idx - apex_pos1) / max(1, len(seg1_indices) - 1 - apex_pos1)
-                        # we aim to move from inside (apex) back toward a neutral/diagonal approach value (~0)
-                        # but will compute exact connection later for transition indices; here bias toward center
-                        target = signed_apex_inside(is_first_left) + (0.0 - signed_apex_inside(is_first_left)) * exit_progress * 0.9
-
-                    # apply using same mapping as your code (positive -> w_left lower bound, negative -> w_right upper bound)
-                    if target > 0:
-                        opti.subject_to(n[i] >= target * w_left[i])
-                    else:
-                        opti.subject_to(n[i] <= target * w_right[i])
-
-                # ---------- SECOND SEGMENT (approach -> apex -> track out)
-                for idx, i in enumerate(seg2_indices):
-                    progress = idx / max(1, len(seg2_indices) - 1)
-                    # For second corner we want to approach apex along the straightline; use a softer entry toward apex
-                    if idx <= apex_pos2:
-                        # entry from the straightline toward apex
-                        entry_progress = idx / max(1, apex_pos2)
-                        # entry start will be filled by the straightline interpolation (computed lower)
-                        # default start value before interpolation: signed_outside(second) (safe fallback)
-                        start_t = signed_outside(is_second_left)
-                        end_t = signed_apex_inside(is_second_left)
-                        target = start_t + (end_t - start_t) * (0.2 + 0.8 * entry_progress)  # bias slightly inside early
-                    else:
-                        # exit: from apex to full outside for good exit
-                        exit_progress = (idx - apex_pos2) / max(1, len(seg2_indices) - 1 - apex_pos2)
-                        start_t = signed_apex_inside(is_second_left)
-                        end_t = signed_exit_outside(is_second_left)
-                        target = start_t + (end_t - start_t) * (exit_progress ** 1.15)  # slightly nonlinear opening
-
-                    if target > 0:
-                        opti.subject_to(n[i] >= target * w_left[i])
-                    else:
-                        opti.subject_to(n[i] <= target * w_right[i])
-
-                # ---------- STRAIGHT LINE CONNECTION BETWEEN APEX1 AND APEX2 (REVISED)
-                # Force a nearly geometric straight line across transition
-                transition_start = (seg1_end + 1) % N
-                transition_end = (seg2_start - 1) % N
-
-                inter_indices = []
-                j = transition_start
-                while True:
-                    if j == seg2_start or j == (seg2_start % N):
-                        break
-                    inter_indices.append(j)
-                    j = (j + 1) % N
-                    if len(inter_indices) > N:
-                        break
-
-                if len(inter_indices) > 0:
-                    # compute pure linear interpolation of lateral offset between apex1 and apex2
-                    # regardless of curvature in that zone
-                    start_val = signed_apex_inside(is_first_left) * 0.35
-                    end_val   = signed_apex_inside(is_second_left) * 0.35
-
-                    for tpos, idx_global in enumerate(inter_indices):
-                        frac = tpos / max(1, len(inter_indices) - 1)
-
-                        # strict linear interpolation (straight path)
-                        interp_target = start_val + (end_val - start_val) * frac
-
-                        # ignore curvature (do NOT damp by curvature anymore)
-                        # small smoothing near edges to avoid jumps
-                        if frac < 0.15:
-                            interp_target = start_val + (interp_target - start_val) * (frac / 0.15)
-                        elif frac > 0.85:
-                            interp_target = interp_target + (end_val - interp_target) * ((frac - 0.85) / 0.15)
-
-                        if interp_target > 0:
-                            opti.subject_to(n[idx_global] >= interp_target * w_left[idx_global])
-                        else:
-                            opti.subject_to(n[idx_global] <= interp_target * w_right[idx_global])
-
-
-                # ---------- SPEED MANAGEMENT BETWEEN APEXES (lenient to favor connecting line)
-                # Allow slightly higher corner speeds for shallow S-turns to favor momentum
-                max_corner_curv = max(abs_curv[i] for i in seg1_indices + seg2_indices)
-                if max_corner_curv > 0.012:
-                    for i in (seg1_indices + seg2_indices):
-                        k = abs(float(curvature[i]))
-                        if k > 0.005:
-                            F_normal_est = vehicle.mass_kg * vehicle.gravity
-                            a_lat_max = 0.95 * vehicle.mu_friction * F_normal_est / vehicle.mass_kg
-                            R = 1.0 / (k + 1e-6)
-                            v_corner_max = ca.sqrt(a_lat_max * R)
-                            opti.subject_to(v[i] <= v_corner_max * 1.25)
-
-
-            
-            # ========================================================================
-            # If corner is MORE than 90 degrees: Use progressive racing line
-            # ========================================================================
-            elif total_angle_deg > 90.0:
-                # Find apex (maximum curvature point)
-                apex_idx = max(seg_indices, key=lambda i: abs_curv[i])
-                apex_position = seg_indices.index(apex_idx)
-                
-                # Progressive racing line through the corner
-                for idx, i in enumerate(seg_indices):
-                    progress = idx / max(1, seg_len - 1)
-                    
-                    if idx <= apex_position:
-                        # Entry phase: outside → inside
-                        progress_to_apex = idx / max(1, apex_position)
-                        target_fraction = 0.95 - 1.75 * progress_to_apex
-                    else:
-                        # Exit phase: inside → outside
-                        progress_from_apex = (idx - apex_position) / max(1, seg_len - 1 - apex_position)
-                        target_fraction = -0.95 + 1.75 * progress_from_apex
-                    
-                    # Apply constraint based on corner direction
-                    if is_left_turn:
-                        if target_fraction > 0:
-                            opti.subject_to(n[i] >= target_fraction * w_left[i])
-                        else:
-                            opti.subject_to(n[i] <= target_fraction * w_right[i])
-                    else:
-                        if target_fraction > 0:
-                            opti.subject_to(n[i] >= target_fraction * w_left[i])
-                        else:
-                            opti.subject_to(n[i] <= target_fraction * w_right[i])
-                
-                # Pre-corner positioning
-                lookahead = min(10, seg_len // 2)
-                for j in range(lookahead):
-                    pre_idx = (s0 - lookahead + j) % N
-                    if not is_corner[pre_idx]:
-                        pre_progress = j / max(1, lookahead - 1)
-                        pre_target = 0.3 + 0.5 * pre_progress
-                        
-                        if is_left_turn:
-                            opti.subject_to(n[pre_idx] <= -pre_target * w_right[pre_idx])
-                        else:
-                            opti.subject_to(n[pre_idx] >= pre_target * w_left[pre_idx])
-                
-                # Speed reduction for sharp hairpins
-                max_corner_curv = max(abs_curv[i] for i in seg_indices)
-                if max_corner_curv > 0.015:
-                    for i in seg_indices:
-                        k = abs(float(curvature[i]))
-                        if k > 0.01:
-                            F_normal_est = vehicle.mass_kg * vehicle.gravity
-                            a_lat_max = 0.90 * vehicle.mu_friction * F_normal_est / vehicle.mass_kg
-                            R = 1.0 / (k + 1e-6)
-                            v_corner_max = ca.sqrt(a_lat_max * R)
-                            opti.subject_to(v[i] <= v_corner_max * 1.15)
-            
-            # ========================================================================
-            # If corner is LESS than or equal to 120 degrees: Use original apex logic
-            # ========================================================================
+        # ENTRY: outside of corner
+        if i in corner_phases['entry']:
+            if is_left_turn:
+                n_init[i] = w_right[i] * 0.7  # Right side for left turn
             else:
-                # Find apex
-                apex_idx = max(seg_indices, key=lambda i: abs_curv[i])
-                
-                # Apply inner-side constraint at apex only
-                apex_inside_fraction = 0.6
-                k = float(curvature[apex_idx])
-                if k > 0:
-                    # Left-hand corner: inside is to the left
-                    opti.subject_to(n[apex_idx] >= apex_inside_fraction * w_left[apex_idx])
-                elif k < 0:
-                    # Right-hand corner: inside is to the right
-                    opti.subject_to(n[apex_idx] <= -apex_inside_fraction * w_right[apex_idx])
-                
-                # Entry window constraint for longer corners
-                if seg_len >= 20:
-                    entry_fraction = 0.25
-                    outside_fraction_require = 0.35
-                    entry_len = max(3, int(entry_fraction * seg_len))
-                    entry_len = min(entry_len, 30)
-                    entry_indices = seg_indices[:entry_len]
-                    
-                    for i in entry_indices:
-                        if is_left_turn:
-                            # Outside is to the right
-                            opti.subject_to(n[i] <= -outside_fraction_require * w_right[i])
-                        else:
-                            # Outside is to the left
-                            opti.subject_to(n[i] >= outside_fraction_require * w_left[i])
-                
-                # Exit window constraint if straight follows
-                straight_thresh = 0.002
-                min_straight_len = 20
-                exit_fraction = 0.35
-                outside_fraction_require = 0.95
-                
-                count_straight = 0
-                j = (s1 + 1) % N
-                while count_straight < min_straight_len:
-                    if abs(float(curvature[j])) < straight_thresh:
-                        count_straight += 1
-                        j = (j + 1) % N
-                        if j == s0:
-                            break
-                    else:
-                        break
-                
-                if count_straight >= min_straight_len:
-                    exit_len = max(3, int(exit_fraction * seg_len))
-                    exit_len = min(exit_len, 30)
-                    exit_indices = seg_indices[-exit_len:]
-                    
-                    for i in exit_indices:
-                        if is_left_turn:
-                            opti.subject_to(n[i] <= -outside_fraction_require * w_right[i])
-                        else:
-                            opti.subject_to(n[i] >= outside_fraction_require * w_left[i])
+                n_init[i] = -w_left[i] * 0.7  # Left side for right turn
+        
+        # 🔥🔥🔥 APEX: RIGHT AT the inside kerb edge!
+        elif i in corner_phases['apex']:
+            if is_left_turn:
+                n_init[i] = -w_left[i] * 0.90  # Was 0.75, now 0.90 (almost touching!)
+            else:
+                n_init[i] = w_right[i] * 0.90  # Was 0.75, now 0.90 (almost touching!)
+        
+        # EXIT: outside of corner
+        elif i in corner_phases['exit']:
+            if is_left_turn:
+                n_init[i] = w_right[i] * 0.8  # Right side for left turn
+            else:
+                n_init[i] = -w_left[i] * 0.8  # Left side for right turn
+        
+        # Default: geometric racing line
+        else:
+            if is_left_turn:
+                # Interpolate based on position in corner
+                n_init[i] = w_right[i] * 0.5
+            else:
+                n_init[i] = -w_left[i] * 0.5
     
-    except Exception as e:
-        print(f"Warning: Corner detection skipped due to: {e}")
-        pass
+    # Smooth the racing line
+    n_init = gaussian_filter1d(n_init, sigma=8, mode='wrap')
     
-    return a_lat
+    # Initialize velocity
+    v_init = np.full(N, vehicle.v_max)
+    
+    for i in range(N):
+        abs_curv = abs(curvature[i])
+        
+        if abs_curv < 1e-6:
+            continue
+        
+        # Calculate path curvature
+        kappa_center = curvature[i]
+        denom = max(1.0 - kappa_center * n_init[i], 1e-3)
+        kappa_path = kappa_center / denom
+        
+        # Speed limit from lateral acceleration
+        a_lat_max = vehicle.a_lat_max
+        v_max_corner = np.sqrt(a_lat_max / (abs(kappa_path) + 1e-6))
+        
+        # Reduce for entry, normal for apex, increase for exit
+        if i in corner_phases['entry']:
+            v_init[i] = min(v_max_corner * 0.85, v_init[i])
+        elif i in corner_phases['apex']:
+            v_init[i] = min(v_max_corner * 0.90, v_init[i])
+        elif i in corner_phases['exit']:
+            v_init[i] = min(v_max_corner * 0.95, v_init[i])
+        else:
+            v_init[i] = min(v_max_corner, v_init[i])
+    
+    # Forward/backward pass for realistic velocity profile
+    for iteration in range(5):
+        # Forward pass
+        for i in range(N):
+            i_prev = (i - 1) % N
+            dt = ds_array[i_prev] / (v_init[i_prev] + 1e-3)
+            v_reachable = v_init[i_prev] + vehicle.a_accel_max * dt
+            v_init[i] = min(v_init[i], v_reachable)
+        
+        # Backward pass
+        for i in range(N-1, -1, -1):
+            i_next = (i + 1) % N
+            dt = ds_array[i] / (v_init[i_next] + 1e-3)
+            v_reachable = v_init[i_next] + vehicle.a_brake_max * dt
+            v_init[i] = min(v_init[i], v_reachable)
+    
+    v_init = np.clip(v_init, vehicle.v_min, vehicle.v_max)
+    
+    # Initialize acceleration
+    a_init = np.zeros(N)
+    for i in range(N):
+        i_next = (i + 1) % N
+        dv = v_init[i_next] - v_init[i]
+        dt = ds_array[i] / (v_init[i] + 1e-3)
+        a_init[i] = dv / dt
+    
+    a_init = np.clip(a_init, -vehicle.a_brake_max, vehicle.a_accel_max)
+    
+    # Set initial values
+    opti.set_initial(n, n_init)
+    opti.set_initial(v, v_init)
+    opti.set_initial(a_lon, a_init)
+    
+    return corner_types, corner_phases

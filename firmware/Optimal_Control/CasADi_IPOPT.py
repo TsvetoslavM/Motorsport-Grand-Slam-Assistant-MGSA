@@ -5,18 +5,19 @@ import matplotlib.pyplot as plt
 from dataclasses import dataclass
 from scipy.ndimage import gaussian_filter1d
 
+# Import from constraints.py
+from constraints import (
+    classify_corner_types, 
+    find_corner_phases,
+    add_constraints,
+    create_objective_with_racing_line,
+    initialize_with_proper_racing_line
+)
+
 try:
-    from .constraints import add_constraints
-    from .visualization import plot_f1_results, print_summary
+    from visualization import plot_f1_results, print_summary
 except Exception:
-    try:
-        from firmware.Optimal_Control.constraints import add_constraints
-        from firmware.Optimal_Control.visualization import plot_f1_results, print_summary
-    except Exception:
-        import os, sys
-        sys.path.append(os.path.dirname(__file__))
-        from constraints import add_constraints
-        from visualization import plot_f1_results, print_summary
+    print("Warning: visualization module not found, skipping plots")
 
 @dataclass
 class VehicleParams:
@@ -51,7 +52,7 @@ vehicle = VehicleParams()
 try:
     track = pd.read_csv("Track.csv", comment="#", names=["x_m","y_m","w_tr_right_m","w_tr_left_m"])
 except:
-    print("Warning: Could not find Turn_1.csv, using synthetic track")
+    print("Warning: Could not find Track.csv, using synthetic track")
     theta = np.linspace(0, 2*np.pi, 100)
     r = 200 + 50*np.sin(3*theta)
     track = pd.DataFrame({
@@ -177,6 +178,10 @@ curvature = gaussian_filter1d(curvature, sigma=2, mode='wrap')
 # ═══════════════════════════════════════════════════════════════
 # 🎯 OPTIMIZATION SETUP
 # ═══════════════════════════════════════════════════════════════
+print("\n" + "="*60)
+print("🎯 OPTIMIZATION SETUP WITH RACING LINE")
+print("="*60)
+
 opti = ca.Opti()
 n = opti.variable(N)
 v = opti.variable(N)
@@ -189,56 +194,28 @@ for i in range(N):
     opti.subject_to(slack_power[i] <= 50000)
 
 # ═══════════════════════════════════════════════════════════════
-# 🔹 B. MULTI-OBJECTIVE COST FUNCTION
+# 🎬 INITIALIZATION WITH RACING LINE
 # ═══════════════════════════════════════════════════════════════
-print("\n" + "="*60)
-print("🔹 MULTI-OBJECTIVE COST FUNCTION")
-print("="*60)
-
-lap_time = ca.sum1(ds_array / v)
-a_lon_squared = ca.sum1(a_lon**2)
-tire_load_penalty = 0.001 * a_lon_squared
-
-path_diffs = [ca.sqrt((n[i+1] - n[i])**2 + ds_array[i]**2) for i in range(N-1)]
-path_length_penalty = 0.01 * ca.sum1(ca.vertcat(*path_diffs))
-
-n_diff = [(n[(i+1)%N] - n[i])**2 for i in range(N)]
-trajectory_smoothness = 0.0001 * ca.sum1(ca.vertcat(*n_diff))
-
-# a_lon_changes = [(a_lon[(i+1)%N] - a_lon[i])**2 for i in range(N)]
-# energy_smoothness = 0.0002 * ca.sum1(ca.vertcat(*a_lon_changes))
-
-reg_n = 1e-8 * ca.sum1(n**2)
-reg_a = 1e-6 * ca.sum1(a_lon**2)
-reg_slack = 1e3 * ca.sum1(slack_power**2)
-
-total_cost = (
-    lap_time +
-    tire_load_penalty +
-    path_length_penalty +
-    trajectory_smoothness +
-    # energy_smoothness +
-    reg_n + reg_a + reg_slack
+print("\nInitializing with proper racing line geometry...")
+corner_types, corner_phases = initialize_with_proper_racing_line(
+    opti, n, v, a_lon, curvature, ds_array, w_left, w_right, vehicle, N
 )
 
-opti.minimize(total_cost)
-
-print("Cost components:")
-print("  ✓ Lap time (primary)")
-print("  ✓ Tire load (G-force squared)")
-print("  ✓ Path smoothness")
-print("  ✓ Trajectory smoothness")
-print("  ✓ Energy efficiency (jerk)")
+print(f"\nCorner classification:")
+for corner_type, indices in corner_types.items():
+    if len(indices) > 0:
+        print(f"  {corner_type}: {len(indices)} segments")
 
 # ═══════════════════════════════════════════════════════════════
-# 🚧 CONSTRAINTS
+# 🚧 CONSTRAINTS WITH RACING LINE AWARENESS
 # ═══════════════════════════════════════════════════════════════
+print("\nAdding constraints with racing line awareness...")
 vehicle.mu_friction = 2.0
 vehicle.cL_downforce = 3.0
 vehicle.a_accel_max = 12.0
 vehicle.a_brake_max = 45.0
 
-a_lat = add_constraints(
+a_lat, corner_types, corner_phases = add_constraints(
     opti=opti,
     vehicle=vehicle,
     n=n,
@@ -252,41 +229,13 @@ a_lat = add_constraints(
 )
 
 # ═══════════════════════════════════════════════════════════════
-# 🎬 INITIALIZATION
+# 🔹 OBJECTIVE FUNCTION WITH RACING LINE
 # ═══════════════════════════════════════════════════════════════
-n_init = np.zeros(N)
-for i in range(N):
-    if curvature[i] > 0.001:
-        n_init[i] = w_left[i] * 0.8
-    elif curvature[i] < -0.001:
-        n_init[i] = -w_right[i] * 0.8
-    else:
-        n_init[i] = 0
-
-v_init = np.zeros(N)
-for i in range(N):
-    abs_curv = abs(curvature[i])
-    if abs_curv < 1e-4:
-        v_init[i] = 120.0
-    else:
-        a_lat_available = vehicle.a_lat_max
-        v_corner = np.sqrt(a_lat_available / (abs_curv + 1e-6))
-        v_init[i] = min(v_corner, 80.0)
-
-v_init = gaussian_filter1d(v_init, sigma=5, mode='wrap')
-v_init = np.clip(v_init, vehicle.v_min, vehicle.v_max)
-opti.set_initial(v, v_init)
-
-a_init = np.zeros(N)
-for i in range(N):
-    i_next = (i + 1) % N
-    dv = v_init[i_next] - v_init[i]
-    dt = ds_array[i] / (v_init[i] + 1e-3)
-    a_init[i] = dv / dt
-
-a_init = np.clip(a_init, -vehicle.a_brake_max, vehicle.a_accel_max)
-opti.set_initial(n, n_init)
-opti.set_initial(a_lon, a_init)
+print("\nCreating objective function with racing line cost...")
+total_cost = create_objective_with_racing_line(
+    opti, v, a_lon, slack_power, n, curvature, w_left, w_right,
+    corner_phases, ds_array, N, vehicle
+)
 
 # ═══════════════════════════════════════════════════════════════
 # ⚙️ SOLVER CONFIGURATION
@@ -323,9 +272,9 @@ print("="*60)
 
 try:
     sol = opti.solve()
-    print("\nOptimization converged successfully!")
+    print("\n✅ Optimization converged successfully!")
 except Exception as e:
-    print(f"\nSolver didn't fully converge: {e}")
+    print(f"\n⚠️ Solver didn't fully converge: {e}")
     print("Using best solution found...")
     sol = opti.debug
 
@@ -337,24 +286,27 @@ v_opt = sol.value(v)
 a_lon_opt = sol.value(a_lon)
 a_lat_opt = sol.value(a_lat)
 
-lap_time_seconds = float(sol.value(lap_time))
+# Calculate lap time
+lap_time = 0
+for i in range(N):
+    i_next = (i + 1) % N
+    v_avg = 0.5 * (v_opt[i] + v_opt[i_next])
+    dt = ds_array[i] / (v_avg + 1e-3)
+    lap_time += dt
+
+lap_time_seconds = float(lap_time)
 track_length = np.sum(ds_array)
 
 # ═══════════════════════════════════════════════════════════════
 # 💾 SAVE OPTIMAL TRAJECTORY TO CSV
 # ═══════════════════════════════════════════════════════════════
-# Compute absolute coordinates of the optimal trajectory
 x_opt = x_center + n_opt * normals[:, 0]
 y_opt = y_center + n_opt * normals[:, 1]
 
-# Compute cumulative time at the start of each segment (t[0] = 0)
 eps = 1e-6
 time_s = np.cumsum(np.concatenate(([0.0], ds_array[:-1] / np.maximum(v_opt[:-1], eps))))
-
-# Convert speed to km/h
 speed_kmh = v_opt * 3.6
 
-# Create dataframe with only required columns
 opt_df = pd.DataFrame({
     "x_m": x_opt,
     "y_m": y_opt,
@@ -362,40 +314,61 @@ opt_df = pd.DataFrame({
     "time_s": time_s,
 })
 
-# Save to CSV
 opt_df.to_csv("optiline.csv", index=False)
 print("\n✅ Optimal trajectory saved as 'optiline.csv'!")
 
 # ═══════════════════════════════════════════════════════════════
 # 📋 PRINT SUMMARY
 # ═══════════════════════════════════════════════════════════════
-print_summary(
-    v_opt=v_opt,
-    a_lon_opt=a_lon_opt,
-    a_lat_opt=a_lat_opt,
-    vehicle=vehicle,
-    lap_time_seconds=lap_time_seconds,
-    track_length=track_length
-)
+print("\n" + "="*60)
+print("📋 OPTIMIZATION RESULTS")
+print("="*60)
+print(f"Lap time: {lap_time_seconds:.3f} seconds")
+print(f"Track length: {track_length:.1f} meters")
+print(f"Average speed: {track_length/lap_time_seconds*3.6:.1f} km/h")
+print(f"Max speed: {np.max(v_opt)*3.6:.1f} km/h")
+print(f"Min speed: {np.min(v_opt)*3.6:.1f} km/h")
+print(f"Max longitudinal accel: {np.max(a_lon_opt):.2f} m/s²")
+print(f"Max braking: {np.min(a_lon_opt):.2f} m/s²")
+print(f"Max lateral accel: {np.max(np.abs(a_lat_opt)):.2f} m/s²")
+
+try:
+    print_summary(
+        v_opt=v_opt,
+        a_lon_opt=a_lon_opt,
+        a_lat_opt=a_lat_opt,
+        vehicle=vehicle,
+        lap_time_seconds=lap_time_seconds,
+        track_length=track_length
+    )
+except:
+    pass
 
 # ═══════════════════════════════════════════════════════════════
 # 📈 VISUALIZATION
 # ═══════════════════════════════════════════════════════════════
-fig = plot_f1_results(
-    x_center=x_center,
-    y_center=y_center,
-    w_left=w_left,
-    w_right=w_right,
-    normals=normals,
-    n_opt=n_opt,
-    v_opt=v_opt,
-    a_lon_opt=a_lon_opt,
-    a_lat_opt=a_lat_opt,
-    ds_array=ds_array,
-    vehicle=vehicle,
-    lap_time_seconds=lap_time_seconds,
-    track_length=track_length,
-    N=N
-)
+try:
+    fig = plot_f1_results(
+        x_center=x_center,
+        y_center=y_center,
+        w_left=w_left,
+        w_right=w_right,
+        normals=normals,
+        n_opt=n_opt,
+        v_opt=v_opt,
+        a_lon_opt=a_lon_opt,
+        a_lat_opt=a_lat_opt,
+        ds_array=ds_array,
+        vehicle=vehicle,
+        lap_time_seconds=lap_time_seconds,
+        track_length=track_length,
+        N=N
+    )
+    plt.show()
+except Exception as e:
+    print(f"\nVisualization error: {e}")
+    print("Continuing without plots...")
 
-plt.show()
+print("\n" + "="*60)
+print("🏁 OPTIMIZATION COMPLETE!")
+print("="*60)
