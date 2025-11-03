@@ -289,6 +289,52 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
                 exit_penalty = ca.fmax(0, n[i] - w_right[i] * 0.3) ** 2
             
             racing_line_cost += exit_penalty * 100.0
+
+    # ---------- Straight setup: bias straights toward outside to prepare next corner ----------
+    # Parameters you can tune:
+    straight_lookahead_m = 80.0    # how far to look ahead for next corner (meters)
+    max_influence = 1.0            # strength multiplier for the straight setup
+    falloff_sigma = 0.20           # meters for Gaussian falloff of influence
+
+    # Precompute cumulative distances along track for lookahead (wrap-aware)
+    cum_ds = np.zeros(N+1)
+    for ii in range(N):
+        cum_ds[ii+1] = cum_ds[ii] + ds_array[ii]
+
+    def find_next_corner_index(idx):
+        # look forward along indices accumulating distance until we find a corner index (abs(curv) > 0.005)
+        dist = 0.0
+        jj = idx
+        steps = 0
+        while dist < straight_lookahead_m and steps < N:
+            jj = (jj + 1) % N
+            dist += ds_array[(jj-1) % N]
+            if abs(curvature[jj]) > 0.005:
+                return jj, dist
+            steps += 1
+        return None, None
+
+    for i in range(N):
+        if abs(curvature[i]) < 0.005:
+            # straight segment: find next corner within lookahead
+            next_corner_idx, dist_to_corner = find_next_corner_index(i)
+            if next_corner_idx is None:
+                continue
+            # Decide which side is "outside" for the upcoming corner:
+            # If next corner is left (curvature>0) we want to be on right side (positive n)
+            if curvature[next_corner_idx] > 0:
+                target = -w_right[next_corner_idx] * 0.8
+            else:
+                target = w_left[next_corner_idx] * 0.8
+
+            # Influence decreases with distance from corner (Gaussian falloff)
+            influence = max_influence * np.exp(-0.5 * (dist_to_corner / falloff_sigma) ** 2)
+            # small safeguard
+            influence = float(np.clip(influence, 0.0, 1.0))
+
+            # Penalize deviation from target on the straight (weighted by influence)
+            straight_setup_penalty = influence * (n[i] - target) ** 2
+            racing_line_cost += straight_setup_penalty * 500.0  # tune the multiplier
     
     return racing_line_cost
 
