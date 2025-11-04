@@ -241,102 +241,95 @@ def add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N):
 
 
 def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_phases, ds_array, N):
-    """Add cost terms to encourage proper racing line geometry: outside-apex-outside.
-    
-    🔥🔥🔥 MAXIMUM AGGRESSION: Ultra-strong apex attraction for knife-edge racing line.
-    """
-    
-    racing_line_cost = 0
-    
+    racing_line_cost = 0.0
+
+    KINK_CURV = 0.005
+    MIN_CORNER_LEN = 5
+    STRAIGHT_WEIGHT = 500.0  # base weight for straight transitions
+
+    # Helper to find corner segments
+    corner_segments = []
+    in_corner = False
+    start_idx = 0
     for i in range(N):
-        if abs(curvature[i]) < 0.005:  # Skip straights
+        if abs(curvature[i]) >= KINK_CURV and not in_corner:
+            in_corner = True
+            start_idx = i
+        elif abs(curvature[i]) < KINK_CURV and in_corner:
+            in_corner = False
+            if i - start_idx >= MIN_CORNER_LEN:
+                corner_segments.append((start_idx, i))
+    if in_corner:
+        corner_segments.append((start_idx, N - 1))
+
+    # Compute corner directions (left/right)
+    corner_info = []
+    for s, e in corner_segments:
+        avg_sign = np.sign(np.sum(curvature[s:e+1]))
+        direction = "left" if avg_sign > 0 else "right"
+        corner_info.append((s, e, direction))
+
+    # 1️⃣ Regular corner geometry penalty (keeps apex inside)
+    for (s, e, direction) in corner_info:
+        seg_indices = list(range(s, e + 1))
+        abs_curv = [abs(float(curvature[i])) for i in seg_indices]
+        apex_idx = seg_indices[np.argmax(abs_curv)]
+        apex_position = seg_indices.index(apex_idx)
+
+        for idx, i in enumerate(seg_indices):
+            progress = idx / max(1, len(seg_indices) - 1)
+            if direction == "left":
+                target = (
+                    -w_right[i] * (1 - progress)
+                    + w_left[i] * progress
+                )
+            else:
+                target = (
+                    w_left[i] * (1 - progress)
+                    - w_right[i] * progress
+                )
+            racing_line_cost += (n[i] - target) ** 2 * 1000.0
+
+    # 2️⃣ Smooth gradual transition between corners
+    for i in range(len(corner_info) - 1):
+        exit_start, exit_end, exit_dir = corner_info[i]
+        next_start, next_end, next_dir = corner_info[i + 1]
+
+        # straight/transition indices between corners
+        mid_indices = list(range(exit_end, next_start))
+        if len(mid_indices) < 3:
             continue
-        
-        is_left_turn = curvature[i] > 0
-        
-        # ENTRY PHASE: penalize being on the inside
-        if i in corner_phases['entry']:
-            if is_left_turn:
-                # Want to be on right side (positive n) on entry
-                # Penalize negative n (left side)
-                entry_penalty = ca.fmax(0, -n[i] - w_left[i] * 0.3) ** 2
-            else:
-                # Want to be on left side (negative n) on entry
-                # Penalize positive n (right side)
-                entry_penalty = ca.fmax(0, n[i] - w_right[i] * 0.3) ** 2
-            
-            racing_line_cost += entry_penalty * 100.0
-        
-        # 🔥🔥🔥 APEX PHASE: NUCLEAR-LEVEL pull to inside edge
-        elif i in corner_phases['apex']:
-            if is_left_turn:
-                # Target: KISSING the left inside kerb
-                apex_target = w_left[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95! EXTREME!
-            else:
-                # Target: KISSING the right inside kerb
-                apex_target = -w_right[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95! EXTREME!
-            
-            apex_cost = (n[i] - apex_target) ** 2
-            racing_line_cost += apex_cost * 2000.0  # 🔥🔥 Was 1000, now 2000 (4x from original!)
-        
-        # EXIT PHASE: penalize being on the inside
-        elif i in corner_phases['exit']:
-            if is_left_turn:
-                # Want to be on right side (positive n) on exit
-                exit_penalty = ca.fmax(0, -n[i] - w_left[i] * 0.3) ** 2
-            else:
-                # Want to be on left side (negative n) on exit
-                exit_penalty = ca.fmax(0, n[i] - w_right[i] * 0.3) ** 2
-            
-            racing_line_cost += exit_penalty * 100.0
 
-    # ---------- Straight setup: bias straights toward outside to prepare next corner ----------
-    # Parameters you can tune:
-    straight_lookahead_m = 80.0    # how far to look ahead for next corner (meters)
-    max_influence = 1.0            # strength multiplier for the straight setup
-    falloff_sigma = 0.20           # meters for Gaussian falloff of influence
+        # define "exit side" (inside of current corner)
+        if exit_dir == "left":
+            exit_side = w_left[exit_end] * 0.8
+        else:
+            exit_side = w_right[exit_end] * 0.8
 
-    # Precompute cumulative distances along track for lookahead (wrap-aware)
-    cum_ds = np.zeros(N+1)
-    for ii in range(N):
-        cum_ds[ii+1] = cum_ds[ii] + ds_array[ii]
+        # define "entry side" (outside for next corner)
+        if next_dir == "left":
+            entry_side = -w_right[next_start] * 0.8
+        else:
+            entry_side = w_left[next_start] * 0.8
 
-    def find_next_corner_index(idx):
-        # look forward along indices accumulating distance until we find a corner index (abs(curv) > 0.005)
-        dist = 0.0
-        jj = idx
-        steps = 0
-        while dist < straight_lookahead_m and steps < N:
-            jj = (jj + 1) % N
-            dist += ds_array[(jj-1) % N]
-            if abs(curvature[jj]) > 0.005:
-                return jj, dist
-            steps += 1
-        return None, None
+        # gradually move from exit_side → entry_side
+        for idx, i_mid in enumerate(mid_indices):
+            t = idx / max(1, len(mid_indices) - 1)
+            # cosine interpolation (smooth start and end)
+            blend = 0.5 - 0.5 * np.cos(np.pi * t)
+            target = (1 - blend) * exit_side + blend * entry_side
+            racing_line_cost += (n[i_mid] - target) ** 2 * STRAIGHT_WEIGHT
 
+    # 3️⃣ Path length penalty to keep centerline reasonable
+    path_length_cost = 0.0
     for i in range(N):
-        if abs(curvature[i]) < 0.005:
-            # straight segment: find next corner within lookahead
-            next_corner_idx, dist_to_corner = find_next_corner_index(i)
-            if next_corner_idx is None:
-                continue
-            # Decide which side is "outside" for the upcoming corner:
-            # If next corner is left (curvature>0) we want to be on right side (positive n)
-            if curvature[next_corner_idx] > 0:
-                target = -w_right[next_corner_idx] * 0.8
-            else:
-                target = w_left[next_corner_idx] * 0.8
+        if abs(curvature[i]) < KINK_CURV:
+            path_length_cost += n[i] ** 2
 
-            # Influence decreases with distance from corner (Gaussian falloff)
-            influence = max_influence * np.exp(-0.5 * (dist_to_corner / falloff_sigma) ** 2)
-            # small safeguard
-            influence = float(np.clip(influence, 0.0, 1.0))
+    racing_line_cost += path_length_cost * 0.000001
 
-            # Penalize deviation from target on the straight (weighted by influence)
-            straight_setup_penalty = influence * (n[i] - target) ** 2
-            racing_line_cost += straight_setup_penalty * 500.0  # tune the multiplier
-    
     return racing_line_cost
+
 
 def extract_single_apex_indices(curvature, corner_phases):
     # Връща един apex index за всеки групиран апекс сегмент (максимална крива)
