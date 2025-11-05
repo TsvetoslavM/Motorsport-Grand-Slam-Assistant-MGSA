@@ -60,7 +60,7 @@ python -m firmware.curves [OPTIONS]
 
 ---
 
-## 📂 Example Data Format
+## 📂 Example Data Format - time_s,x_m,y_m,w_tr_right_m,w_tr_left_m,pitch_deg,roll_deg
 
 ### Track Points (CSV)
 
