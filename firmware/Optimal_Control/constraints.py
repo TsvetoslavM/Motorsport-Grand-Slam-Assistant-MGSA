@@ -19,10 +19,10 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
             continue
         
         # 1️⃣ Намери apex1
-        apex1_idx = max(corner1_indices, key=lambda i: abs(curvature[i]))
+        apex1_idx = max(corner1_indices, key=lambda i: abs(curvature[i])) + 1
         
         # 2️⃣ Намери apex2
-        apex2_idx = min(corner2_indices)
+        apex2_idx = min(corner2_indices) + 1
         
         # 3️⃣ Entry point (по-рано преди първия завой)
         entry_idx = (min(corner1_indices) - 5) % N  # 🔥 увеличено от 3 на 5
@@ -61,23 +61,23 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
         
         # 6️⃣ APEX1
         if dir1 == 'left':
-            apex1_target = w_left[apex1_idx] * 0.98
+            apex1_target = w_left[apex1_idx]
         else:
-            apex1_target = -w_right[apex1_idx] * 0.98
+            apex1_target = -w_right[apex1_idx]
         
         chicane_cost += (n[apex1_idx] - apex1_target) ** 2 * 10000.0
         
         # 7️⃣ TRANSITION
         if apex2_idx > apex1_idx:
-            transition_indices = list(range(apex1_idx + 1, apex2_idx))
+            transition_indices = list(range(apex1_idx, apex2_idx))
         else:
-            transition_indices = list(range(apex1_idx + 1, N)) + list(range(0, apex2_idx))
+            transition_indices = list(range(apex1_idx, N)) + list(range(0, apex2_idx))
         
         if transition_indices:
-            apex2_target = w_left[apex2_idx] * 0.98 if dir2 == 'left' else -w_right[apex2_idx] * 0.98
+            apex2_target = w_left[apex2_idx] * 1.02 if dir2 == 'left' else -w_right[apex2_idx] * 1.02
             for idx, trans_idx in enumerate(transition_indices):
-                t = (idx + 1) / (len(transition_indices) + 1)
-                target = (1 - t) * apex1_target + t * apex2_target
+                t = (idx + 2) / len(transition_indices)
+                target = (1.5 - t) * apex1_target + (1 - t) * apex2_target
                 chicane_cost += (n[trans_idx] - target) ** 2 * 3000.0
         
         # 8️⃣ APEX2
@@ -88,13 +88,6 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
         
         chicane_cost += (n[apex2_idx] - apex2_target) ** 2 * 10000.0
         
-        # След apex2, добави междинни контролни точки
-        exit_control_points = [
-            (corner2_end + 5, 0.70),   # 5 сегмента след, 70% към outside
-            (corner2_end + 10, 0.99),  # 10 сегмента след, 85% към outside
-            (corner2_end + 15, 0.95),  # 15 сегмента след, 95% към outside
-        ]
-
         if full_exit_indices:
             num_exit = len(full_exit_indices)
             
@@ -104,32 +97,26 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
             else:
                 final_outside = w_left[exit_end_idx] * 0.99
             
-            buffer_ratio = 0.2
+            buffer_ratio = 0.6
             buffer_count = max(1, int(buffer_ratio * num_exit))
-            
+            blend_power = 0.1   # степен на забавяне (можеш да пробваш и 4)
+
             for idx, exit_idx in enumerate(full_exit_indices):
                 t = idx / max(1, num_exit - 1)
-                
-                # Cubic easing с плавен старт
+
                 if idx < buffer_count:
-                    # Плавен старт: много бавно движение в първите точки
-                    blend = (idx / buffer_count) ** 2 * 0.1
+                    # още по-бавно начало
+                    blend = (idx / buffer_count) ** blend_power * 0.08
                 else:
-                    # Основен cubic easing за останалата част
                     t_adj = (idx - buffer_count) / max(1, num_exit - buffer_count - 1)
-                    if t_adj < 0.5:
-                        blend = 0.1 + 2 * t_adj * t_adj * 0.45  # бавно ускорение
-                    else:
-                        blend = 0.55 + (1 - 2 * (1 - t_adj) * (1 - t_adj)) * 0.45
-                
+                    # плавен преход към финалната линия
+                    blend = 0.08 + (t_adj ** blend_power) * 0.95
+
                 target = (1 - blend) * apex2_target + blend * final_outside
-                
-                # По-плавно тегло
-                weight = 10000.0 * (1 - t) + 4000.0 * t  # силно в началото, намалява към края
-                
+
+                weight = 10000.0 * (1 - t) + 4000.0 * t
                 chicane_cost += (n[exit_idx] - target) ** 2 * weight
-                
-                # Допълнителен smoothness penalty
+
                 if idx > 0:
                     prev_exit_idx = full_exit_indices[idx - 1]
                     dn = n[exit_idx] - n[prev_exit_idx]
