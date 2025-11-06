@@ -99,7 +99,7 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
             
             buffer_ratio = 0.6
             buffer_count = max(1, int(buffer_ratio * num_exit))
-            blend_power = 0.1   # степен на забавяне (можеш да пробваш и 4)
+            blend_power = 0.001   # степен на забавяне (можеш да пробваш и 4)
 
             for idx, exit_idx in enumerate(full_exit_indices):
                 t = idx / max(1, num_exit - 1)
@@ -110,7 +110,7 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
                 else:
                     t_adj = (idx - buffer_count) / max(1, num_exit - buffer_count - 1)
                     # плавен преход към финалната линия
-                    blend = 0.08 + (t_adj ** blend_power) * 0.95
+                    blend = 0.08 + t_adj ** blend_power
 
                 target = (1 - blend) * apex2_target + blend * final_outside
 
