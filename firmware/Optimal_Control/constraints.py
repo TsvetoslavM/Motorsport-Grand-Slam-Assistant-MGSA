@@ -395,7 +395,7 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
 
     KINK_CURV = 0.005
     MIN_CORNER_LEN = 5
-    STRAIGHT_WEIGHT = 500.0
+    STRAIGHT_WEIGHT = 1000.0
 
     # Helper to find corner segments
     corner_segments = []
@@ -450,18 +450,18 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
             continue
 
         if exit_dir == "left":
-            exit_side = w_left[exit_end] * 0.8
+            exit_side = w_left[exit_end]
         else:
-            exit_side = w_right[exit_end] * 0.8
+            exit_side = w_right[exit_end]
 
         if next_dir == "left":
-            entry_side = -w_right[next_start] * 0.8
+            entry_side = -w_right[next_start]
         else:
-            entry_side = w_left[next_start] * 0.8
+            entry_side = w_left[next_start]
 
         for idx, i_mid in enumerate(mid_indices):
             t = idx / max(1, len(mid_indices) - 1)
-            blend = 0.5 - 0.5 * np.cos(np.pi * t)
+            blend = 1 - 1 * np.cos(np.pi * t)
             target = (1 - blend) * exit_side + blend * entry_side
             racing_line_cost += (n[i_mid] - target) ** 2 * STRAIGHT_WEIGHT
 
@@ -584,7 +584,7 @@ def add_constraints(
         F_rolling = vehicle.c_rr * vehicle.mass_kg * vehicle.gravity
         F_resistance = F_drag + F_rolling
         P_required = vehicle.mass_kg * a_lon[i] * v[i] + F_resistance * v[i]
-        opti.subject_to(P_required <= vehicle.engine_power_watts + slack_power[i])
+        opti.subject_to(P_required <= vehicle.engine_power_watts * 1.1 + slack_power[i])
         opti.subject_to(P_required >= -vehicle.brake_power_watts - slack_power[i])
 
     # 7) Longitudinal acceleration bounds
@@ -681,7 +681,7 @@ def create_objective_with_racing_line(
     # Combined objective
     total_cost = (
         lap_time * 1.0 +
-        power_slack_penalty * 0.001 +
+        power_slack_penalty * 0.0001 +
         racing_line_cost * 0.0002 +
         smoothness_cost * 0.000001 +
         path_length_cost * 0.0000005

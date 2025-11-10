@@ -36,7 +36,7 @@ class VehicleParams:
     c_rr: float = 0.02
     wheelbase_m: float = 3.6
     v_min: float = 15.0
-    v_max: float = 100.0
+    v_max: float = 200.0
 
     def k_aero(self) -> float:
         return (0.5 * self.rho_air * self.cL_downforce * self.frontal_area_m2) / self.mass_kg
