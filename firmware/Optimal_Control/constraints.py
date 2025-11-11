@@ -25,7 +25,7 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
         apex2_idx = min(corner2_indices) + 1
         
         # 3️⃣ Entry point (по-рано преди първия завой)
-        entry_idx = (min(corner1_indices) - 5) % N  # 🔥 увеличено от 3 на 5
+        entry_idx = (min(corner1_indices) - 3) % N  # 🔥 увеличено от 3 на 5
         
         # 4️⃣ Exit zone (удължена зона след apex2)
         # Вместо една точка, направи постепенен изход
@@ -231,7 +231,7 @@ def classify_corner_types(curvature, ds_array, N):
         
         # Look ahead for opposite curvature
         distance = 0
-        for j in range(1, 30):
+        for j in range(1, 50):
             idx = (i + j) % N
             distance += ds_array[(i + j - 1) % N]
             
@@ -244,7 +244,7 @@ def classify_corner_types(curvature, ds_array, N):
                 corner2_indices = []
                 
                 # Намери пълния обхват на първия завой
-                for k in range(max(0, i-5), i+10):
+                for k in range(i-5, i+10):
                     k_idx = k % N
                     if abs(curvature[k_idx]) > SWEEPER_CURV and np.sign(curvature[k_idx]) == np.sign(curvature[i]):
                         corner1_indices.append(k_idx)
@@ -440,7 +440,34 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
                 )
             racing_line_cost += (n[i] - target) ** 2 * 1000.0
 
-    # 2️⃣ Smooth gradual transition between corners
+    # 2️⃣ Enhanced smooth gradual transition between corners with chicane logic
+    def is_corner_in_chicane(corner_start, corner_end, corner_types):
+        """Check if a corner segment is part of any chicane sequence."""
+        if corner_types is None or 'chicane_sequences' not in corner_types:
+            return False
+        
+        # Create set of indices for the corner segment (handling wrap-around)
+        if corner_end >= corner_start:
+            corner_indices = set(range(corner_start, corner_end + 1))
+        else:
+            corner_indices = set(list(range(corner_start, N)) + list(range(0, corner_end + 1)))
+        
+        # Check each chicane sequence
+        for chicane in corner_types['chicane_sequences']:
+            chicane_indices = set()
+            # Add all indices from corner1
+            for idx in chicane['corner1']:
+                chicane_indices.add(idx)
+            # Add all indices from corner2
+            for idx in chicane['corner2']:
+                chicane_indices.add(idx)
+            
+            # If there's any overlap, this corner is part of a chicane
+            if corner_indices & chicane_indices:  # Set intersection
+                return True
+        
+        return False
+
     for i in range(len(corner_info) - 1):
         exit_start, exit_end, exit_dir = corner_info[i]
         next_start, next_end, next_dir = corner_info[i + 1]
@@ -454,14 +481,27 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
         else:
             exit_side = w_right[exit_end]
 
-        if next_dir == "left":
-            entry_side = -w_right[next_start]
+        # Enhanced chicane detection for the next corner
+        is_next_a_chicane = is_corner_in_chicane(next_start, next_end, corner_types)
+        
+        # Calculate entry_side based on chicane status
+        if is_next_a_chicane:
+            # For chicane corners: outside-to-inside approach for optimal chicane entry
+            if next_dir == "left":
+                entry_side = w_right[next_start]  # Approach from right (positive) for left chicane turn
+            else:
+                entry_side = -w_left[next_start]  # Approach from left (negative) for right chicane turn
         else:
-            entry_side = w_left[next_start]
+            # Normal corner entry logic: outside approach
+            if next_dir == "left":
+                entry_side = -w_right[next_start]  # Approach from right (negative) for left turn
+            else:
+                entry_side = w_left[next_start]    # Approach from left (positive) for right turn
 
+        # Apply smooth transition
         for idx, i_mid in enumerate(mid_indices):
             t = idx / max(1, len(mid_indices) - 1)
-            blend = 1 - 1 * np.cos(np.pi * t)
+            blend = 1.0 - 1.0 * np.cos(np.pi * t)
             target = (1 - blend) * exit_side + blend * entry_side
             racing_line_cost += (n[i_mid] - target) ** 2 * STRAIGHT_WEIGHT
 
@@ -566,12 +606,14 @@ def add_constraints(
     a_lat = ca.MX.zeros(N)
     for i in range(N):
         kappa_center = curvature[i]
+        eps = 1e-3
         denom = 1.0 - kappa_center * n[i]
-        denom = ca.fmax(denom, 1e-3)
+        denom = ca.sign(denom) * ca.fmax(ca.fabs(denom), eps)
         kappa_path = kappa_center / denom
-        a_lat[i] = v[i] ** 2 * kappa_path
+        lateral_factor = 0.8  # Reduce effective curvature
+        a_lat[i] = v[i] ** 2 * kappa_path * lateral_factor
 
-    # 5) Combined traction circle (ellipse)
+    # 5) Combined traction circle (ellipse) - RELAXED
     for i in range(N):
         F_normal = vehicle.mass_kg * (vehicle.gravity + vehicle.k_aero() * v[i] ** 2)
         a_max_total = vehicle.mu_friction * F_normal / vehicle.mass_kg
@@ -683,7 +725,7 @@ def create_objective_with_racing_line(
         lap_time * 1.0 +
         power_slack_penalty * 0.0001 +
         racing_line_cost * 0.0002 +
-        smoothness_cost * 0.000001 +
+        smoothness_cost * 1.0 +
         path_length_cost * 0.0000005
     )
     
