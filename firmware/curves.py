@@ -2,11 +2,8 @@ from .curvature import curvature, curvature_vectorized
 from .smoothing import smooth_curvatures_vectorized, smooth_curvatures_multi_scale
 from .segmentation import segment_track_multi_scale, segment_by_median_mad
 from .visualization import (
-    ascii_track_visualization_scaled,
     plot_curvature_heatmap,
-    plot_curvature_heatmap_3d,
     plotly_curvature_heatmap_html,
-    plotly_curvature_heatmap_3d_html,
     plotly_track_outline_from_widths_html,
 )
 from .examples import visualize_curvature_concept, test_segmentation_debug, compare_performance
@@ -26,9 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--factor", type=float, default=3.0, help="MAD threshold factor (for --mad)")
     parser.add_argument("--mad", action="store_true", help="Run median+MAD segmentation on points file")
     parser.add_argument("--heatmap", action="store_true", help="Render curvature heatmap (requires matplotlib)")
-    parser.add_argument("--heatmap3d", action="store_true", help="Render 3D curvature heatmap (requires matplotlib)")
     parser.add_argument("--web", type=str, default=None, help="Export interactive 2D heatmap to HTML at given path (requires plotly)")
-    parser.add_argument("--web3d", type=str, default=None, help="Export interactive 3D heatmap to HTML at given path (requires plotly)")
     parser.add_argument("--raceline", type=str, default=None, help="Optional CSV with x,y to overlay as racing line on 2D web export")
     parser.add_argument("--outline-csv", type=str, default=None, help="CSV with columns x,y,left,right to render track outline")
     parser.add_argument("--outline-web", type=str, default=None, help="Output HTML path for outline render")
@@ -83,18 +78,8 @@ def handle_outline_render(args: argparse.Namespace) -> None:
             try:
                 from .io import load_points as _load_points
                 raceline_pts = _load_points(args.raceline)
-                # Compute v_max and optimal speed along raceline for hover
-                params = VehicleParams(
-                    mass_kg=798.0,
-                    mu_friction=2.0,
-                    gravity=9.81,
-                    rho_air=1.225,
-                    cL_downforce=4.0,
-                    frontal_area_m2=1.6,
-                    engine_power_watts=735000.0,
-                    a_brake_max=54.0,
-                    a_accel_cap=54.0,
-                )
+                # Compute v_max and optimal speed along raceline for hover (use shared defaults)
+                params = VehicleParams()
                 s, kappa, v_lat, v = speed_profile(raceline_pts, params)
                 raceline_vmax = v_lat
                 raceline_vopt = v
@@ -135,18 +120,13 @@ def handle_outline_render(args: argparse.Namespace) -> None:
         print(f"Failed outline render: {e}")
 
 
-def render_static_heatmaps(points: list[tuple[float, float]], curvs, points_file: str, heatmap_2d: bool, heatmap_3d: bool) -> None:
-    """Render 2D/3D matplotlib heatmaps if requested."""
+def render_static_heatmaps(points: list[tuple[float, float]], curvs, points_file: str, heatmap_2d: bool) -> None:
+    """Render 2D matplotlib heatmap if requested."""
     if heatmap_2d:
         res = plot_curvature_heatmap(points, curvs, title=f"Curvature Heatmap ({os.path.basename(points_file)})")
         if res is not None:
             plt, fig, ax = res
             plt.show()
-    if heatmap_3d:
-        res3 = plot_curvature_heatmap_3d(points, curvs, title=f"Curvature Heatmap 3D ({os.path.basename(points_file)})")
-        if res3 is not None:
-            plt3, fig3, ax3 = res3
-            plt3.show()
 
 
 def export_web_heatmaps(points: list[tuple[float, float]], curvs, args: argparse.Namespace, points_file: str) -> None:
@@ -168,15 +148,6 @@ def export_web_heatmaps(points: list[tuple[float, float]], curvs, args: argparse
         )
         if ok:
             print(f"Wrote HTML to {args.web}")
-    if args.web3d:
-        ok3 = plotly_curvature_heatmap_3d_html(
-            points,
-            curvs,
-            args.web3d,
-            title=f"Curvature Heatmap 3D ({os.path.basename(points_file)})",
-        )
-        if ok3:
-            print(f"Wrote HTML to {args.web3d}")
 
 
 def export_turns_straights(points: list[tuple[float, float]], curvs, args: argparse.Namespace, points_file: str) -> None:
@@ -314,8 +285,7 @@ def run_default_demo(points_file: str | None) -> None:
     test_segmentation_debug(points_file)
     # compare_performance()
     track_points = [(i, 3 * math.sin(i / 10)) for i in range(50)]
-    segments = segment_track_multi_scale(track_points, window_sizes=[3, 5, 9], threshold_factors=[0.5, 0.5, 0.5])
-    ascii_track_visualization_scaled(segments, width=60, height=15)
+    _ = segment_track_multi_scale(track_points, window_sizes=[3, 5, 9], threshold_factors=[0.5, 0.5, 0.5])
 
 
 def main() -> None:
@@ -340,17 +310,7 @@ def main() -> None:
             return
 
         pts = load_points(raceline_csv)
-        params = VehicleParams(
-            mass_kg=798.0,
-            mu_friction=2.0,
-            gravity=9.81,
-            rho_air=1.225,
-            cL_downforce=4.0,
-            frontal_area_m2=1.6,
-            engine_power_watts=735000.0,
-            a_brake_max=54.0,
-            a_accel_cap=54.0,
-        )
+        params = VehicleParams()
         s, kappa, v_lat, v = speed_profile(pts, params)
         out_csv = os.path.join(os.path.dirname(raceline_csv), "raceline_vmax.csv")
         export_csv(out_csv, pts, s, kappa, v)
@@ -366,14 +326,14 @@ def main() -> None:
     handle_outline_render(args)
 
     # Operations requiring a points file
-    if (args.mad or args.heatmap or args.heatmap3d or args.web or args.web3d or args.turns_web or True) and points_file:
+    if (args.mad or args.heatmap or args.web or args.turns_web or True) and points_file:
         pts = load_points(points_file)
         curvs = curvature_vectorized(pts)
 
         if args.mad:
             run_mad_segmentation(pts, factor=args.factor, print_json_flag=args.print_json)
 
-        render_static_heatmaps(pts, curvs, points_file, heatmap_2d=args.heatmap, heatmap_3d=args.heatmap3d)
+        render_static_heatmaps(pts, curvs, points_file, heatmap_2d=args.heatmap)
         export_web_heatmaps(pts, curvs, args, points_file)
         export_turns_straights(pts, curvs, args, points_file)
 
@@ -382,7 +342,7 @@ def main() -> None:
 
 
     # If no explicit action flags were provided, run the default demo
-    if not (args.mad or args.heatmap or args.heatmap3d or args.web or args.web3d or args.turns_web or (args.outline_csv and args.outline_web)):
+    if not (args.mad or args.heatmap or args.web or args.turns_web or (args.outline_csv and args.outline_web)):
         run_default_demo(points_file)
 
 

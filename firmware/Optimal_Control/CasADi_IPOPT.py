@@ -2,47 +2,23 @@ import casadi as ca
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from dataclasses import dataclass
 from scipy.ndimage import gaussian_filter1d
 
-# Import from constraints.py
-from constraints import (
-    classify_corner_types, 
+from firmware.vehicle import VehicleParams
+
+# Import from sibling modules (package-relative)
+from .constraints import (
+    classify_corner_types,
     find_corner_phases,
     add_constraints,
     create_objective_with_racing_line,
-    initialize_with_proper_racing_line
+    initialize_with_proper_racing_line,
 )
 
 try:
-    from visualization import plot_f1_results, print_summary
+    from .visualization import plot_f1_results, print_summary
 except Exception:
     print("Warning: visualization module not found, skipping plots")
-
-@dataclass
-class VehicleParams:
-    mass_kg: float = 798.0
-    mu_friction: float = 1.8
-    gravity: float = 9.81
-    rho_air: float = 1.225
-    cL_downforce: float = 3.0
-    cD_drag: float = 1.2
-    frontal_area_m2: float = 1.5
-    engine_power_watts: float = 750000.0
-    brake_power_watts: float = 2500000.0
-    a_accel_max: float = 12.0
-    a_brake_max: float = 45.0
-    a_lat_max: float = 60.0
-    c_rr: float = 0.02
-    wheelbase_m: float = 3.6
-    v_min: float = 15.0
-    v_max: float = 200.0
-
-    def k_aero(self) -> float:
-        return (0.5 * self.rho_air * self.cL_downforce * self.frontal_area_m2) / self.mass_kg
-
-    def k_drag(self) -> float:
-        return 0.5 * self.rho_air * self.cD_drag * self.frontal_area_m2
 
 vehicle = VehicleParams()
 

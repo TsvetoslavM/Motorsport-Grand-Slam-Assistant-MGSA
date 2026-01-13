@@ -5,6 +5,8 @@ import numpy as np
 import os
 from functools import reduce
 
+from firmware.geometry import compute_track_edges
+
 MODERN_STYLE = '''
 <style>
 body {
@@ -62,22 +64,15 @@ def read_and_prepare(lines):
     return pd.concat(dfs_interp, ignore_index=True)
 
 def load_track_edges(track_csv):
-    df = pd.read_csv(track_csv, comment="#", names=["x_m","y_m","w_tr_right_m","w_tr_left_m"])
-    x = df['x_m'].values
-    y = df['y_m'].values
-    dx = np.gradient(x)
-    dy = np.gradient(y)
-    norm = np.sqrt(dx**2 + dy**2)
-    tx = dx / norm
-    ty = dy / norm
-    nx = -ty
-    ny = tx
-    x_left = x + nx * df['w_tr_left_m'].values
-    y_left = y + ny * df['w_tr_left_m'].values
-    x_right = x - nx * df['w_tr_right_m'].values
-    y_right = y - ny * df['w_tr_right_m'].values
-    left_df = pd.DataFrame({'x': x_left, 'y': y_left})
-    right_df = pd.DataFrame({'x': x_right, 'y': y_right})
+    """Load track centerline + widths and compute left/right edge coordinates."""
+    df = pd.read_csv(track_csv, comment="#", names=["x_m", "y_m", "w_tr_right_m", "w_tr_left_m"])
+    x = df["x_m"].values
+    y = df["y_m"].values
+    w_right = df["w_tr_right_m"].values
+    w_left = df["w_tr_left_m"].values
+    x_left, y_left, x_right, y_right, _, _ = compute_track_edges(x, y, w_left, w_right)
+    left_df = pd.DataFrame({"x": x_left, "y": y_left})
+    right_df = pd.DataFrame({"x": x_right, "y": y_right})
     return left_df, right_df
 
 def add_delay_info(bigdf, base_label):

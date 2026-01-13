@@ -1,31 +1,3 @@
-def ascii_track_visualization_scaled(segments, width=60, height=15):
-    """Visualize segments with curvature intensity"""
-    all_y = [y for seg in segments for _,y in seg[1]]
-    y_min, y_max = min(all_y), max(all_y)
-    y_range = y_max-y_min if y_max!=y_min else 1.0
-
-    for i, seg in enumerate(segments):
-        seg_type, pts, entry, apex, exit, apex_kappa = seg
-        print(f"\nSegment {i+1} - {seg_type}: {len(pts)} points")
-        canvas = [[" " for _ in range(width)] for _ in range(height)]
-        for idx, (x,y) in enumerate(pts):
-            if len(pts) == 1:
-                col = 0
-            else:
-                col = int((idx/(len(pts)-1))*(width-1))
-            row = int((y_max - y)/y_range*(height-1))
-            if seg_type=="права":
-                symbol = "─"
-            else:
-                rel = min(abs(y - entry[1]) / (abs(apex[1]-entry[1])+1e-6), 1.0) if entry else 0.5
-                if rel<0.33: symbol="░"
-                elif rel<0.66: symbol="▒"
-                else: symbol="▓"
-            canvas[row][col]=symbol
-        for row in canvas:
-            print("".join(row))
-
-
 def plot_curvature_heatmap(points, curvatures, cmap="viridis", linewidth=3.0, s=15, show_points=True, title="Curvature Heatmap", colorbar_label="Curvature κ"):
     """Plot a heatmap-like visualization by coloring the track by curvature.
 
@@ -91,72 +63,6 @@ def plot_curvature_heatmap(points, curvatures, cmap="viridis", linewidth=3.0, s=
         cbar = plt.colorbar(sc, ax=ax)
         cbar.set_label(colorbar_label)
         return plt, fig, ax
-
-
-def plot_curvature_heatmap_3d(points, curvatures, cmap="viridis", linewidth=2.0, s=10, title="Curvature Heatmap 3D", colorbar_label="Curvature κ"):
-    """3D visualization: x-y track colored by curvature with z as curvature height.
-
-    - Plots the polyline in 3D where z-axis equals curvature magnitude
-    - Colors line and points by curvature using the given colormap
-    """
-    try:
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-        import numpy as np
-    except ImportError:
-        print("matplotlib is required for 3D heatmap visualization. Install with: pip install matplotlib")
-        return
-
-    if len(points) == 0:
-        print("No points to visualize.")
-        return
-
-    pts = np.asarray(points, dtype=float)
-    x = pts[:,0]
-    y = pts[:,1]
-
-    curvs = np.asarray(curvatures, dtype=float)
-    if len(curvs) != len(pts):
-        if len(curvs) == len(pts) - 2:
-            curvs = np.pad(curvs, (1,1), mode='edge')
-        else:
-            curvs = np.interp(np.arange(len(pts)), np.linspace(0, len(pts)-1, len(curvatures)), curvatures)
-    z = curvs
-
-    fig = plt.figure(figsize=(9, 6))
-    ax = fig.add_subplot(111, projection='3d')
-    ax.set_title(title)
-    ax.set_xlabel('x')
-    ax.set_ylabel('y')
-    ax.set_zlabel('κ')
-
-    # Draw 3D line colored by curvature by plotting many short segments
-    cmap_obj = plt.get_cmap(cmap)
-    z_min, z_max = float(z.min()), float(z.max()) if float(z.max())>0 else 1.0
-    rng = max(z_max - z_min, 1e-9)
-    for i in range(len(pts)-1):
-        xs = [x[i], x[i+1]]
-        ys = [y[i], y[i+1]]
-        zs = [z[i], z[i+1]]
-        color = cmap_obj((z[i] - z_min) / rng)
-        ax.plot(xs, ys, zs, color=color, linewidth=linewidth)
-
-    # Scatter points with same colormap
-    norm = plt.Normalize(vmin=z_min, vmax=z_max)
-    sc = ax.scatter(x, y, z, c=z, cmap=cmap, norm=norm, s=s)
-    cbar = plt.colorbar(sc, ax=ax, pad=0.1, shrink=0.7)
-    cbar.set_label(colorbar_label)
-
-    # Aspect
-    max_range = np.array([x.max()-x.min(), y.max()-y.min(), z.max()-z.min()]).max() or 1.0
-    mid_x = (x.max()+x.min())/2
-    mid_y = (y.max()+y.min())/2
-    mid_z = (z.max()+z.min())/2
-    ax.set_xlim(mid_x - max_range/2, mid_x + max_range/2)
-    ax.set_ylim(mid_y - max_range/2, mid_y + max_range/2)
-    ax.set_zlim(max(0, mid_z - max_range/2), mid_z + max_range/2)
-
-    return plt, fig, ax
 
 
 def plotly_curvature_heatmap_html(points, curvatures, output_html, title="MGSA Headmap", raceline_points=None, smooth_iterations: int = 3):
@@ -241,40 +147,6 @@ def plotly_curvature_heatmap_html(points, curvatures, output_html, title="MGSA H
     return True
 
 
-def plotly_curvature_heatmap_3d_html(points, curvatures, output_html, title="Curvature Heatmap 3D (web)"):
-    """Export an interactive 3D curvature heatmap to self-contained HTML using Plotly."""
-    try:
-        import plotly.graph_objects as go
-        import numpy as np
-    except ImportError:
-        print("plotly is required for web export. Install with: pip install plotly")
-        return False
-
-    if len(points)==0:
-        print("No points to export.")
-        return False
-
-    pts = np.asarray(points, dtype=float)
-    x = pts[:,0]
-    y = pts[:,1]
-
-    curvs = np.asarray(curvatures, dtype=float)
-    if len(curvs) != len(pts):
-        if len(curvs) == len(pts)-2:
-            curvs = np.pad(curvs, (1,1), mode='edge')
-        else:
-            curvs = np.interp(np.arange(len(pts)), np.linspace(0, len(pts)-1, len(curvatures)), curvatures)
-    z = curvs
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode="lines+markers",
-                               marker=dict(size=3, color=z, colorscale="Viridis", colorbar=dict(title="κ")),
-                               line=dict(width=4, color=z, colorscale="Viridis")))
-    fig.update_layout(title=title, scene=dict(xaxis_title="x", yaxis_title="y", zaxis_title="κ"))
-    fig.write_html(output_html, include_plotlyjs="cdn", full_html=True, auto_open=False)
-    return True
-
-
 def _write_html_with_css(fig,
                          output_html: str,
                          css_text: str | None = None,
@@ -302,6 +174,9 @@ def _write_html_with_css(fig,
     except Exception as e:
         print(f"Failed to write HTML with CSS: {e}")
         return False
+
+
+from .geometry import compute_track_edges
 
 
 def plotly_track_outline_from_widths_html(centerline_with_widths,
@@ -346,27 +221,17 @@ def plotly_track_outline_from_widths_html(centerline_with_widths,
         return False
 
     arr = np.asarray(centerline_with_widths, dtype=float)
-    x = arr[:,0]; y = arr[:,1]; lw = arr[:,2]; rw = arr[:,3]
+    x = arr[:, 0]
+    y = arr[:, 1]
+    lw = arr[:, 2]
+    rw = arr[:, 3]
     pts = np.stack([x, y], axis=1)
 
-    # Compute tangents and normals
-    def _tangents(p: np.ndarray) -> np.ndarray:
-        d = np.zeros_like(p)
-        d[1:-1] = (p[2:] - p[:-2]) / 2.0
-        d[0] = p[1] - p[0]
-        d[-1] = p[-1] - p[-2]
-        return d
-
-    t = _tangents(pts)
-    # Normal: rotate tangent by +90 degrees: (dx, dy) -> (-dy, dx)
-    n = np.stack([-t[:,1], t[:,0]], axis=1)
-    # Normalize normals, avoid zero-length
-    norms = np.linalg.norm(n, axis=1)
-    norms[norms == 0] = 1.0
-    n = n / norms[:,None]
-
-    left_edge_raw = pts + n * lw[:,None]
-    right_edge_raw = pts - n * rw[:,None]
+    # Use shared geometry helper for edges and normals
+    x_left, y_left, x_right, y_right, nx, ny = compute_track_edges(x, y, lw, rw)
+    left_edge_raw = np.stack([x_left, y_left], axis=1)
+    right_edge_raw = np.stack([x_right, y_right], axis=1)
+    n = np.stack([nx, ny], axis=1)
 
     # Optional smoothing (Chaikin) for nicer outlines
     def _chaikin_open(poly: np.ndarray, iterations: int = 2) -> np.ndarray:

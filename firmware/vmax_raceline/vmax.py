@@ -1,38 +1,13 @@
 import math
-from dataclasses import dataclass
 from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 
 from ..curvature import curvature_vectorized
+from ..vehicle import VehicleParams
 
 
 Point = Tuple[float, float]
-
-
-@dataclass
-class VehicleParams:
-    mass_kg: float = 798.0
-    mu_friction: float = 2.0
-    gravity: float = 9.81
-    rho_air: float = 1.225
-    cL_downforce: float = 4.0
-    frontal_area_m2: float = 1.6
-    engine_power_watts: float = 735000.0
-    a_brake_max: float = 54.0  # m/s^2, hard cap for braking decel (system limit)
-    a_accel_cap: float = 20.0  # m/s^2, optional hard cap for longitudinal accel
-    cD_drag: float = 1.0       # aerodynamic drag coefficient
-    c_rr: float = 0.004        # rolling resistance coefficient (F1-like)
-    safety_speed_margin: float = 1.00  # multiplier for global power cap (≤ 1.0)
-    brake_power_watts: float = 1200000.0  # optional power dissipation limit for braking
-
-    def k_aero(self) -> float:
-        # k_aero = (0.5 * rho * C_L * A) / m
-        return (0.5 * self.rho_air * self.cL_downforce * self.frontal_area_m2) / max(self.mass_kg, 1e-9)
-
-    def k_drag(self) -> float:
-        # k_drag = 0.5 * rho * C_D * A
-        return 0.5 * self.rho_air * self.cD_drag * self.frontal_area_m2
 
 
 def compute_arc_length(points: Sequence[Point]) -> Tuple[np.ndarray, np.ndarray]:
