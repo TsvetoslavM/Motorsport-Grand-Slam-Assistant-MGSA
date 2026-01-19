@@ -1,17 +1,13 @@
 # server.py - MGSA Laptop Server (Field Test Ready)
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta, timezone
-import asyncio
-import csv
-import json
-import logging
-import os
-import sqlite3
+from datetime import datetime, timezone
+import csv, json, logging, sqlite3, asyncio
 from pathlib import Path
+from fastapi.responses import FileResponse
+
 
 # jwt is still used indirectly via server/auth.py; keep dependency installed.
 
@@ -19,9 +15,6 @@ from pathlib import Path
 # CONFIG
 # =========================
 SERVER_VERSION = "1.1.0-field"
-SECRET_KEY = os.getenv("MGSA_SECRET_KEY", "mgsa-secret-key-change-this")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
 DATA_DIR = Path("./mgsa_data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -51,7 +44,7 @@ from server.auth import create_token, users, verify_token
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # за тестове; после стесни
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -535,48 +528,7 @@ async def get_status(token: dict = Depends(verify_token)):
         "db_path": str(DB_PATH.absolute()),
     }
 
-# class OptimizeRequest(BaseModel):
-#     outer_lap_id: str
-#     inner_lap_id: str
-#     track_id: str
-
-
-# @app.post("/api/trajectory/optimize")
-# async def optimize(req: OptimizeRequest, token: dict = Depends(verify_token)):
-#     outer = db_get_lap(req.outer_lap_id)
-#     inner = db_get_lap(req.inner_lap_id)
-#     if not outer or not inner:
-#         raise HTTPException(status_code=404, detail="outer/inner lap not found")
-
-#     outer_xy = load_xy(req.outer_lap_id)
-#     inner_xy = load_xy(req.inner_lap_id)
-#     if len(outer_xy) < 10 or len(inner_xy) < 10:
-#         raise HTTPException(status_code=400, detail="not enough points")
-
-#     ideal = [{"lat": lat, "lon": lon, "i": i} for i, (lat, lon) in enumerate(outer_xy)]
-
-#     payload = {
-#         "track_id": req.track_id,
-#         "outer_lap_id": req.outer_lap_id,
-#         "inner_lap_id": req.inner_lap_id,
-#         "created_at": now_iso(),
-#         "ideal": ideal,
-#         "meta": {
-#             "method": "mvp_outer_as_ideal",
-#             "outer_points": len(outer_xy),
-#             "inner_points": len(inner_xy),
-#         },
-#     }
-
-#     (DATA_DIR / f"{req.track_id}_ideal.json").write_text(
-#         json.dumps(payload), encoding="utf-8"
-#     )
-
-#     await manager.broadcast({"type": "ideal_ready", "track_id": req.track_id})
-#     return payload
-
 class BuildBoundariesRequest(BaseModel):
-    track_id: str
     outer_lap_id: str
     inner_lap_id: str
     n_points: int = 800  # можеш 300..2000, според GPS честота/дължина
@@ -584,9 +536,6 @@ class BuildBoundariesRequest(BaseModel):
 
 @app.post("/api/track/{track_id}/boundaries/build")
 async def build_boundaries(track_id: str, req: BuildBoundariesRequest, token: dict = Depends(verify_token)):
-    if req.track_id != track_id:
-        raise HTTPException(status_code=400, detail="track_id mismatch")
-
     outer = db_get_lap(req.outer_lap_id)
     inner = db_get_lap(req.inner_lap_id)
     if not outer or not inner:
@@ -742,7 +691,6 @@ def track_path(track_id: str) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
-from fastapi import UploadFile, File
 
 @app.post("/api/track/{track_id}/ideal/upload")
 async def upload_ideal(track_id: str, file: UploadFile = File(...), token: dict = Depends(verify_token)):
@@ -756,8 +704,6 @@ async def upload_ideal(track_id: str, file: UploadFile = File(...), token: dict 
 
     await manager.broadcast({"type": "ideal_updated", "track_id": track_id, "updated": now_iso()})
     return {"status": "ok", "track_id": track_id, "bytes": len(data), "path": str(out)}
-
-from fastapi.responses import FileResponse
 
 @app.get("/api/track/{track_id}/ideal")
 async def download_ideal(track_id: str, token: dict = Depends(verify_token)):
