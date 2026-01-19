@@ -642,6 +642,53 @@ async def download_boundaries(track_id: str, token: dict = Depends(verify_token)
     return FileResponse(str(out), media_type="text/csv", filename="boundaries.csv")
 
 
+class BoundarySample(BaseModel):
+    time_s: float
+    outer_lat: float
+    outer_lon: float
+    inner_lat: float
+    inner_lon: float
+
+
+class BoundariesUpload(BaseModel):
+    samples: List[BoundarySample]
+
+
+@app.post("/api/track/{track_id}/boundaries/upload_json")
+async def upload_boundaries_json(track_id: str, req: BoundariesUpload, token: dict = Depends(verify_token)):
+    """
+    Приема JSON списък със семпли и го записва в boundaries.csv
+    формат: time_s,outer_lat,outer_lon,inner_lat,inner_lon
+    """
+    if not req.samples:
+        raise HTTPException(status_code=400, detail="No samples provided")
+
+    out_path = boundaries_csv_path(track_id)
+    with open(out_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time_s", "outer_lat", "outer_lon", "inner_lat", "inner_lon"])
+        for s in req.samples:
+            w.writerow([s.time_s, s.outer_lat, s.outer_lon, s.inner_lat, s.inner_lon])
+
+    meta = track_path(track_id) / "boundaries.meta.json"
+    meta.write_text(
+        json.dumps(
+            {
+                "updated": now_iso(),
+                "track_id": track_id,
+                "source": "json_upload",
+                "samples": len(req.samples),
+                "path": str(out_path),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    await manager.broadcast({"type": "boundaries_updated", "track_id": track_id, "updated": now_iso()})
+    return {"status": "ok", "track_id": track_id, "samples": len(req.samples), "path": str(out_path)}
+
+
 # =========================
 # WEBSOCKET
 # =========================
@@ -722,6 +769,81 @@ async def download_ideal(track_id: str, token: dict = Depends(verify_token)):
 @app.get("/api/track/{track_id}/ideal/meta")
 async def ideal_meta(track_id: str, token: dict = Depends(verify_token)):
     meta = track_path(track_id) / "ideal.meta.json"
+    if not meta.exists():
+        return {"exists": False}
+    return json.loads(meta.read_text(encoding="utf-8"))
+
+
+class RacingPoint(BaseModel):
+    time_s: float
+    lat: float
+    lon: float
+    speed_kmh: float
+
+
+class RacingLineUpload(BaseModel):
+    kind: str = Field("optimal", description="Тип линия: 'optimal', 'driver', и т.н.")
+    points: List[RacingPoint]
+
+
+@app.post("/api/track/{track_id}/racing_line/upload")
+async def upload_racing_line(track_id: str, req: RacingLineUpload, token: dict = Depends(verify_token)):
+    """
+    Приема състезателна линия като JSON:
+    time_s, lat, lon, speed_kmh
+    и я записва в CSV файл racing_{kind}.csv в track директорията.
+    """
+    if not req.points:
+        raise HTTPException(status_code=400, detail="No points provided")
+
+    safe_kind = "".join(c for c in req.kind if c.isalnum() or c in ("_", "-")) or "line"
+    out = track_path(track_id) / f"racing_{safe_kind}.csv"
+
+    with open(out, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time_s", "lat", "lon", "speed_kmh"])
+        for p in req.points:
+            w.writerow([p.time_s, p.lat, p.lon, p.speed_kmh])
+
+    meta = track_path(track_id) / f"racing_{safe_kind}.meta.json"
+    meta.write_text(
+        json.dumps(
+            {
+                "updated": now_iso(),
+                "track_id": track_id,
+                "kind": safe_kind,
+                "points": len(req.points),
+                "path": str(out),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    await manager.broadcast(
+        {
+            "type": "racing_line_updated",
+            "track_id": track_id,
+            "kind": safe_kind,
+            "updated": now_iso(),
+        }
+    )
+    return {"status": "ok", "track_id": track_id, "kind": safe_kind, "points": len(req.points), "path": str(out)}
+
+
+@app.get("/api/track/{track_id}/racing_line/{kind}")
+async def download_racing_line(track_id: str, kind: str, token: dict = Depends(verify_token)):
+    safe_kind = "".join(c for c in kind if c.isalnum() or c in ("_", "-")) or "line"
+    out = track_path(track_id) / f"racing_{safe_kind}.csv"
+    if not out.exists():
+        raise HTTPException(status_code=404, detail="Racing line not found")
+    return FileResponse(str(out), media_type="text/csv", filename=f"racing_{safe_kind}.csv")
+
+
+@app.get("/api/track/{track_id}/racing_line/{kind}/meta")
+async def racing_line_meta(track_id: str, kind: str, token: dict = Depends(verify_token)):
+    safe_kind = "".join(c for c in kind if c.isalnum() or c in ("_", "-")) or "line"
+    meta = track_path(track_id) / f"racing_{safe_kind}.meta.json"
     if not meta.exists():
         return {"exists": False}
     return json.loads(meta.read_text(encoding="utf-8"))
