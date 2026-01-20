@@ -3,36 +3,50 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import math
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 
+def _normalize_base_url(base_url: str) -> str:
+    u = base_url.strip().rstrip("/")
+    if u.startswith("http://127.0.0.1"):
+        u = u.replace("127.0.0.1", "localhost", 1)
+    if u.startswith("https://127.0.0.1"):
+        u = u.replace("127.0.0.1", "localhost", 1)
+    return u
+
+
 def _http_json(method: str, url: str, payload: dict | None = None, headers: dict | None = None) -> dict:
     data = None
-    hdrs = {"Content-Type": "application/json"}
+    hdrs = {"Content-Type": "application/json", "Accept": "application/json"}
     if headers:
         hdrs.update(headers)
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
+
     req = urllib.request.Request(url, method=method, data=data, headers=hdrs)
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        body = resp.read().decode("utf-8")
-        return json.loads(body)
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        raise RuntimeError(f"HTTP {e.code} {e.reason} url={url} body={body}") from e
 
 
 def _login(base_url: str, username: str, password: str) -> str:
     resp = _http_json("POST", f"{base_url}/api/auth/login", {"username": username, "password": password})
-    return resp["access_token"]
-
-
-def _safe_kind(s: str) -> str:
-    out = "".join(c for c in s if c.isalnum() or c in ("_", "-"))
-    return out or "line"
+    return str(resp["access_token"])
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -52,7 +66,7 @@ def _speed_to_kmh(v: float) -> float:
 
 def _fetch_lap_points(base_url: str, lap_id: str, token: str) -> list[dict[str, Any]]:
     headers = {"Authorization": f"Bearer {token}"}
-    resp = _http_json("GET", f"{base_url}/api/lap/{lap_id}", headers=headers)
+    resp = _http_json("GET", f"{base_url}/api/lap/{lap_id}", None, headers=headers)
     points = resp.get("points") or []
     return points
 
@@ -63,27 +77,33 @@ def _points_to_racing(points: list[dict[str, Any]]) -> list[dict[str, float]]:
 
     t0 = None
     out: list[dict[str, float]] = []
-    for i, p in enumerate(points):
+    for p in points:
         try:
             ts = str(p.get("timestamp") or "")
             dt = _parse_iso(ts)
             if t0 is None:
                 t0 = dt
             time_s = (dt - t0).total_seconds()
+
             lat = float(p["latitude"])
             lon = float(p["longitude"])
             speed_raw = float(p.get("speed", 0.0))
             speed_kmh = _speed_to_kmh(speed_raw)
-            out.append({"time_s": float(time_s), "lat": lat, "lon": lon, "speed_kmh": speed_kmh})
+
+            out.append({"time_s": float(time_s), "lat": lat, "lon": lon, "speed_kmh": float(speed_kmh)})
         except Exception:
             continue
 
-    if len(out) >= 2:
-        for i in range(1, len(out)):
-            if out[i]["time_s"] <= out[i - 1]["time_s"]:
-                out[i]["time_s"] = out[i - 1]["time_s"] + 0.02
+    for i in range(1, len(out)):
+        if out[i]["time_s"] <= out[i - 1]["time_s"]:
+            out[i]["time_s"] = out[i - 1]["time_s"] + 0.02
 
     return out
+
+
+def _safe_kind(kind: str) -> str:
+    s = "".join(c for c in kind if c.isalnum() or c in ("_", "-"))
+    return s or "line"
 
 
 def _upload_racing_points(base_url: str, track_id: str, kind: str, token: str, points: list[dict[str, float]]) -> None:
@@ -117,16 +137,11 @@ def _run_visualizer(base_url: str, track_id: str, username: str, password: str, 
     return subprocess.run(cmd).returncode
 
 
-async def _ws_loop(base_url: str, username: str, password: str, track_id: str, out_dir: Path, kinds_extra: list[str]) -> int:
-    try:
-        import websockets
-    except Exception:
-        print("[ERROR] Missing dependency: websockets")
-        print("Install: pip install websockets")
-        return 1
+async def _ws_loop(base_url: str, username: str, password: str, track_id: str, out_dir: Path, also_kinds: list[str]) -> int:
+    import websockets
 
-    ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://")
-    ws_url = ws_url.rstrip("/") + "/ws/live"
+    base_url = _normalize_base_url(base_url)
+    ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/") + "/ws/live"
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -136,6 +151,8 @@ async def _ws_loop(base_url: str, username: str, password: str, track_id: str, o
     print(f"[*] Track: {track_id}")
     print(f"[*] Out dir: {out_dir}")
 
+    processed: set[str] = set()
+
     async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20) as ws:
         while True:
             msg = await ws.recv()
@@ -144,6 +161,7 @@ async def _ws_loop(base_url: str, username: str, password: str, track_id: str, o
                     msg = msg.decode("utf-8")
                 except Exception:
                     continue
+
             try:
                 data = json.loads(msg)
             except Exception:
@@ -153,8 +171,9 @@ async def _ws_loop(base_url: str, username: str, password: str, track_id: str, o
                 continue
 
             lap_id = str(data.get("lap_id") or "").strip()
-            if not lap_id:
+            if not lap_id or lap_id in processed:
                 continue
+            processed.add(lap_id)
 
             print(f"\n[EVENT] lap_completed: {lap_id}")
 
@@ -170,7 +189,7 @@ async def _ws_loop(base_url: str, username: str, password: str, track_id: str, o
                 print(f"[OK] Uploaded racing line kind='{kind}' points={len(racing)}")
 
                 out_html = out_dir / f"{track_id}_{kind}.html"
-                kinds = [kind] + [k for k in kinds_extra if k and k != kind]
+                kinds = [kind] + [k for k in also_kinds if k and k != kind]
                 rc = _run_visualizer(base_url, track_id, username, password, out_html, kinds)
 
                 if rc == 0:
@@ -184,7 +203,7 @@ async def _ws_loop(base_url: str, username: str, password: str, track_id: str, o
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Watch WS for lap_completed and auto-generate HTML visualization.")
-    ap.add_argument("--base-url", default="http://127.0.0.1:8000")
+    ap.add_argument("--base-url", default="http://localhost:8000")
     ap.add_argument("--track-id", required=True)
     ap.add_argument("--username", default="admin")
     ap.add_argument("--password", default="admin123")
@@ -192,8 +211,16 @@ def main() -> int:
     ap.add_argument("--also-kinds", nargs="*", default=[], help="Extra racing-line kinds to include (e.g. optimal driver).")
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir)
-    return asyncio.run(_ws_loop(args.base_url, args.username, args.password, args.track_id, out_dir, list(args.also_kinds)))
+    return asyncio.run(
+        _ws_loop(
+            args.base_url,
+            args.username,
+            args.password,
+            args.track_id,
+            Path(args.out_dir),
+            list(args.also_kinds),
+        )
+    )
 
 
 if __name__ == "__main__":

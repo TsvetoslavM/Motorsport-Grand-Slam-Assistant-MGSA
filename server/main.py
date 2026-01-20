@@ -1,4 +1,6 @@
 import logging
+import uvicorn
+
 from server.app import create_app
 from server.config import DATA_DIR
 
@@ -10,8 +12,6 @@ logging.basicConfig(
 app = create_app()
 
 if __name__ == "__main__":
-    import uvicorn
-
     print("\n" + "=" * 60)
     print("MGSA Server - Laptop Backend (Field Test Ready)")
     print("=" * 60)
@@ -20,10 +20,5 @@ if __name__ == "__main__":
     print("CTRL+C to stop")
     print("=" * 60 + "\n")
 
-    uvicorn.run(
-        "server.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=False,
-        log_level="info",
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False, log_level="info")
+
