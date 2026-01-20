@@ -7,8 +7,7 @@ This script:
   3. Generates comparison HTML
 
 Usage:
-  python -m tests.upload_and_visualize_track --base-url http://127.0.0.1:8001 --track-id mytrack --boundaries-csv boundaries.csv --racing-line optimal raceline.csv
-"""
+  python -m tests.upload_and_visualize_track --base-url http://127.0.0.1:8001 --track-id mytrack --boundaries-csv boundaries.csv --compute-optimal --simulate-line driver"""
 
 from __future__ import annotations
 
