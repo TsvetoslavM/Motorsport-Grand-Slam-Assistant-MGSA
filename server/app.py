@@ -1,12 +1,18 @@
 import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+
 
 from .config import SERVER_VERSION, DATA_DIR, DB_PATH
 from .db import db_init
 from .runtime import current_lap_id
 from .ws import manager
 from .routes import all_routers
+
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
 
 logger = logging.getLogger("mgsa-server")
 
@@ -16,6 +22,11 @@ def create_app() -> FastAPI:
         description="Motorsport GPS Analysis - Laptop Server",
         version=SERVER_VERSION,
     )
+
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
 
     app.add_middleware(
         CORSMiddleware,
@@ -67,4 +78,10 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
 
+    @app.get("/compare")
+    async def compare_page():
+        p = static_dir / "compare.html"
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="compare.html not found")
+        return FileResponse(str(p), media_type="text/html")
     return app

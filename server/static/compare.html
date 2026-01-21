@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>MGSA Compare</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .wrap { display: grid; grid-template-columns: 1.2fr 0.8fr; height: 100vh; }
+    #map { height: 100vh; }
+    .panel { padding: 14px; overflow: auto; border-left: 1px solid #eee; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    input, button { font-size: 14px; padding: 8px 10px; }
+    button { cursor: pointer; }
+    .kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+    .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; }
+    .big { font-size: 18px; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 13px; }
+    th { position: sticky; top: 0; background: white; }
+    canvas { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="map"></div>
+
+    <div class="panel">
+      <div class="row">
+        <input id="baseUrl" value="http://localhost:8000" style="width: 220px;">
+        <input id="trackId" value="mytrack" style="width: 120px;">
+        <input id="driverKind" value="driver" style="width: 120px;">
+        <input id="token" placeholder="Bearer token" style="width: 280px;">
+        <button id="btnLoad">Load</button>
+      </div>
+
+      <div class="kpi">
+        <div class="card">
+          <div class="big" id="kpiTotalLoss">-</div>
+          <div>Total time loss (s)</div>
+        </div>
+        <div class="card">
+          <div class="big" id="kpiP95">-</div>
+          <div>P95 error (m)</div>
+        </div>
+        <div class="card">
+          <div class="big" id="kpiMean">-</div>
+          <div>Mean error (m)</div>
+        </div>
+        <div class="card">
+          <div class="big" id="kpiMax">-</div>
+          <div>Max error (m)</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 12px;">
+        <div style="font-weight:700; margin-bottom:8px;">Time loss by distance</div>
+        <canvas id="chart" height="130"></canvas>
+      </div>
+
+      <div class="card" style="margin-top: 12px;">
+        <div style="font-weight:700; margin-bottom:8px;">Top segments (most time loss)</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Segment (m)</th>
+              <th>Loss (s)</th>
+              <th>Mean err (m)</th>
+              <th>Max err (m)</th>
+            </tr>
+          </thead>
+          <tbody id="segTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+let map = L.map('map');
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
+
+let layerOuter=null, layerInner=null, layerOpt=null, layerDrv=null;
+let chart=null;
+
+function toLatLng(arr){ return arr.map(p => [p.lat, p.lon]); }
+
+function setPolyline(ref, latlngs, opts){
+  if(ref) map.removeLayer(ref);
+  return L.polyline(latlngs, opts).addTo(map);
+}
+
+function fmt(x, d=2){ return (x===null || x===undefined) ? "-" : Number(x).toFixed(d); }
+
+async function loadCompare(){
+  const baseUrl = document.getElementById("baseUrl").value.trim();
+  const trackId = document.getElementById("trackId").value.trim();
+  const driverKind = document.getElementById("driverKind").value.trim();
+  const token = document.getElementById("token").value.trim();
+
+  const url = `${baseUrl}/api/analysis/compare/${encodeURIComponent(trackId)}`;
+  const payload = { driver_kind: driverKind, n_points: 250, segment_len_m: 20.0, ipopt_print_level: 0 };
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? {"Authorization": `Bearer ${token}`} : {})
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if(!resp.ok){
+    const txt = await resp.text();
+    alert(`HTTP ${resp.status}\n${txt}`);
+    return;
+  }
+
+  const data = await resp.json();
+
+  const outer = toLatLng(data.polylines.outer);
+  const inner = toLatLng(data.polylines.inner);
+  const opt = toLatLng(data.polylines.optimal);
+  const drv = toLatLng(data.polylines.driver);
+
+  layerOuter = setPolyline(layerOuter, outer, { weight: 4, color: "#FFD400", opacity: 0.9 });
+  layerInner = setPolyline(layerInner, inner, { weight: 4, color: "#2E6BFF", opacity: 0.9 });
+  layerOpt = setPolyline(layerOpt, opt, { weight: 4, color: "#00C853", opacity: 0.95 });
+  layerDrv = setPolyline(layerDrv, drv, { weight: 4, color: "#FF1744", opacity: 0.95 });
+
+  const allPts = outer.concat(inner).concat(opt).concat(drv);
+  map.fitBounds(L.latLngBounds(allPts));
+
+  document.getElementById("kpiTotalLoss").textContent = fmt(data.stats.total_time_loss_s, 3);
+  document.getElementById("kpiP95").textContent = fmt(data.stats.error_m.p95, 3);
+  document.getElementById("kpiMean").textContent = fmt(data.stats.error_m.mean, 3);
+  document.getElementById("kpiMax").textContent = fmt(data.stats.error_m.max, 3);
+
+  const s = data.series.s_m;
+  const tl = data.series.time_loss_s;
+
+  const ctx = document.getElementById('chart');
+  if(chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: s.map(x => Math.round(x)),
+      datasets: [{
+        label: 'time_loss_s (per step)',
+        data: tl,
+        tension: 0.2,
+        pointRadius: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: true } },
+      scales: {
+        x: { display: false },
+        y: { beginAtZero: false }
+      }
+    }
+  });
+
+  const tbody = document.getElementById("segTable");
+  tbody.innerHTML = "";
+  for(const seg of data.segments.top){
+    const tr = document.createElement("tr");
+    const s0 = Math.round(seg.s0);
+    const s1 = Math.round(seg.s1);
+    tr.innerHTML = `
+      <td>${s0}–${s1}</td>
+      <td>${fmt(seg.time_loss_s, 3)}</td>
+      <td>${fmt(seg.mean_err_m, 3)}</td>
+      <td>${fmt(seg.max_err_m, 3)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("btnLoad").addEventListener("click", loadCompare);
+</script>
+</body>
+</html>

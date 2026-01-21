@@ -10,6 +10,9 @@ from ..runtime import now_iso, current_lap_id, set_current_lap_id
 from ..storage import ensure_csv_header, lap_csv_path, load_lap_points
 from ..ws import manager
 
+from ..tracks import track_path
+import json
+
 logger = logging.getLogger("mgsa-server")
 router = APIRouter(prefix="/api/lap", tags=["laps"])
 
@@ -24,10 +27,21 @@ async def start_lap(req: StartLapRequest, token: dict = Depends(verify_token)):
     db_insert_lap(lap_id, req.track_name, start_time)
     set_current_lap_id(lap_id)
     ensure_csv_header(lap_csv_path(lap_id))
+    meta_path = track_path(req.track_name) / f"{lap_id}.meta.json"
+    meta_path.write_text(
+        json.dumps({"lap_id": lap_id, "track_name": req.track_name, "lap_type": req.lap_type}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     logger.info(f"Started lap: {lap_id} track={req.track_name}")
 
-    await manager.broadcast({"type": "lap_started", "lap_id": lap_id, "track_name": req.track_name, "start_time": start_time})
+    await manager.broadcast({
+    "type": "lap_started",
+    "lap_id": lap_id,
+    "track_name": req.track_name,
+    "lap_type": req.lap_type,
+    "start_time": start_time
+    })
     return {"lap_id": lap_id, "status": "recording", "start_time": start_time}
 
 @router.post("/stop")

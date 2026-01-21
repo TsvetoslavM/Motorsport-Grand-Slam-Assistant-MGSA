@@ -149,3 +149,77 @@ async def racing_line_meta(track_id: str, kind: str, token: dict = Depends(verif
     if not meta.exists():
         return {"exists": False}
     return json.loads(meta.read_text(encoding="utf-8"))
+
+
+from ..models import BuildRacingLineFromLapRequest
+from ..storage import load_lap_points
+from datetime import datetime
+
+
+
+@router.post("/{track_id}/racing_line/build_from_lap")
+async def build_racing_line_from_lap(track_id: str, req: BuildRacingLineFromLapRequest, token: dict = Depends(verify_token)):
+    lap = db_get_lap(req.lap_id)
+    if not lap:
+        raise HTTPException(status_code=404, detail="lap not found")
+
+    pts = load_lap_points(req.lap_id)
+    if len(pts) < 10:
+        raise HTTPException(status_code=400, detail="not enough points in lap")
+
+    kind = safe_kind(req.kind)
+    out = track_path(track_id) / f"racing_{kind}.csv"
+
+    # build time_s from timestamp if possible, else fallback to index
+    def _parse_iso(ts: str) -> datetime | None:
+        try:
+            # handles "2026-01-21T10:55:06.529000+00:00"
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    t0 = None
+    time_s_list = []
+
+    for i, r in enumerate(pts):
+        ts = r.get("timestamp")
+        dt = _parse_iso(ts) if isinstance(ts, str) else None
+        if dt is None:
+            time_s_list.append(float(i))
+            continue
+        if t0 is None:
+            t0 = dt
+        time_s_list.append((dt - t0).total_seconds())
+
+    with open(out, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["time_s", "lat", "lon", "speed_kmh"])
+        for i, r in enumerate(pts):
+            try:
+                lat = float(r["latitude"])
+                lon = float(r["longitude"])
+                speed_mps = float(r.get("speed", 0.0))  # stored as m/s in lap csv
+                speed_kmh = speed_mps * 3.6
+                w.writerow([float(time_s_list[i]), lat, lon, speed_kmh])
+            except Exception:
+                continue
+
+    meta = track_path(track_id) / f"racing_{kind}.meta.json"
+    meta.write_text(
+        json.dumps(
+            {
+                "updated": now_iso(),
+                "track_id": track_id,
+                "kind": kind,
+                "source": "lap_build",
+                "source_lap_id": req.lap_id,
+                "points": len(pts),
+                "path": str(out),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    await manager.broadcast({"type": "racing_line_updated", "track_id": track_id, "kind": kind, "updated": now_iso()})
+    return {"status": "ok", "track_id": track_id, "kind": kind, "points": len(pts), "path": str(out)}

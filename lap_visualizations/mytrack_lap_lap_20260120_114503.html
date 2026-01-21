@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MGSA Track Compare — mytrack</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+
+    html, body { margin:0; padding:0; background:#0b1220; height:100%; }
+    .checkered-bg { background: repeating-linear-gradient(45deg,#000,#000 16px,#fff 16px,#fff 32px); height: 4px; }
+
+    .header {
+      padding:18px 22px;
+      background:linear-gradient(135deg,#1a1a1a 0%,#0d0d0d 100%);
+      color:#fff;
+      border-bottom:3px solid #dc2626;
+    }
+    .container { max-width:1200px; margin:0 auto; padding:0 22px; }
+    .title {
+      font-family:'Orbitron',sans-serif;
+      font-size:22px;
+      font-weight:900;
+      letter-spacing:2px;
+      text-transform:uppercase;
+      color:#dc2626;
+    }
+    .kicker {
+      font-family:'Orbitron',sans-serif;
+      font-size:12px;
+      color:#fbbf24;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:1px;
+    }
+    .text {
+      background:#0f172a;
+      border-bottom:2px solid #1e293b;
+      padding:16px 0;
+      color:#e2e8f0;
+      font-family:'Orbitron',sans-serif;
+      line-height:1.6;
+    }
+    .legend {
+      margin-top:10px;
+      font-size:13px;
+      color:#94a3b8;
+      padding:10px;
+      background:#1e293b;
+      border-left:3px solid #dc2626;
+      border-radius:4px;
+    }
+
+    .map-wrap { background:#0b1220; padding:16px 0; }
+    #map {
+      width:100%;
+      height:72vh;
+      border-radius:10px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.35);
+      background:#0b1220;
+      border: 1px solid rgba(148,163,184,0.18);
+    }
+
+    .hud {
+      position:absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 9999;
+      background: rgba(15,23,42,0.92);
+      color:#e2e8f0;
+      border: 1px solid rgba(148,163,184,0.25);
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+      max-width: 520px;
+    }
+    .row { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+    .dot {
+      width:10px; height:10px; border-radius: 999px;
+      background:#fbbf24; display:inline-block;
+      box-shadow: 0 0 14px rgba(251,191,36,0.55);
+    }
+    .small { font-size:12px; opacity:0.92; }
+    .muted { color:#94a3b8; }
+    .btn {
+      cursor:pointer; user-select:none;
+      padding:6px 10px; border-radius:10px;
+      border: 1px solid rgba(148,163,184,0.25);
+      background: rgba(30,41,59,0.65);
+      color:#e2e8f0;
+      font-size:12px;
+    }
+    .btn:hover { background: rgba(30,41,59,0.9); }
+
+    .footer {
+      padding:14px 0;
+      background:linear-gradient(135deg,#0d0d0d 0%,#1a1a1a 100%);
+      color:#94a3b8;
+      border-top:2px solid #1e293b;
+      font-family:'Orbitron',sans-serif;
+      font-size:11px;
+    }
+    .footer-row {
+      display:flex; justify-content:space-between;
+      gap:16px; flex-wrap:wrap; align-items:center;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="checkered-bg"></div>
+
+  <div class="header">
+    <div class="container" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div class="title">🏁 MGSA Track Compare — mytrack</div>
+      <div class="kicker">WS-only updates • http://localhost:8000</div>
+    </div>
+  </div>
+
+  <div class="text">
+    <div class="container">
+      <div class="legend"><b>Refresh</b> toggles listening mode.<br/>When ON: map updates only on completed-file events (<b>lap_completed</b>, <b>boundaries_ready</b>, <b>boundaries_updated</b>, <b>racing_line_updated</b>).<br/><span style='color:#fbbf24'>Camera:</span> never auto-fit; you control zoom/pan.</div>
+    </div>
+  </div>
+
+  <div class="map-wrap">
+    <div class="container" style="position:relative;">
+      <div id="map"></div>
+
+      <div class="hud">
+        <div class="row">
+          <div><span class="dot"></span> <b>LIVE</b> <span class="muted">track:</span> <span id="track">mytrack</span></div>
+          <div class="btn" id="refreshBtn">Refresh</div>
+        </div>
+        <div class="small muted" style="margin-top:6px;">
+          <div>Boundaries: <span id="bStatus">?</span></div>
+          <div>Lines: <span id="lStatus">?</span></div>
+          <div>Last event: <span id="evt">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="checkered-bg"></div>
+
+  <div class="footer">
+    <div class="container footer-row">
+      <div style="font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;">MGSA • Field Test</div>
+      <div style="color:#64748b;">Start/Stop refresh • No camera reset</div>
+    </div>
+  </div>
+
+<script>
+  const BASE_URL = "http://localhost:8000";
+  const TRACK_ID = "mytrack";
+  const USERNAME = "admin";
+  const PASSWORD = "admin123";
+  const INITIAL_KINDS = ["lap_lap_20260120_114503", "optimal"];
+
+  let token = null;
+
+  const map = L.map('map', { zoomControl: true }).setView([42.7144, 23.2743], 17);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 20,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  let layerOuter = null;
+  let layerInner = null;
+  let lineLayers = new Map();
+  let refreshing = false;
+
+    // Live toggle (WS-driven refresh)
+  let liveMode = false;
+  let wsRef = null;
+  let pingTimer = null;
+
+  const ALLOW_EVENTS = new Set([
+    "lap_completed",
+    "boundaries_ready",
+    "boundaries_updated",
+    "racing_line_updated"
+  ]);
+
+  function setLiveMode(on) {
+    liveMode = !!on;
+
+    const btn = document.getElementById("refreshBtn");
+    btn.textContent = liveMode ? "Live: ON" : "Live: OFF";
+
+    const dot = document.querySelector(".hud .dot");
+    if (dot) {
+      dot.style.background = liveMode ? "#22c55e" : "#fbbf24";
+      dot.style.boxShadow = liveMode
+        ? "0 0 14px rgba(34,197,94,0.55)"
+        : "0 0 14px rgba(251,191,36,0.55)";
+    }
+  }
+
+
+  async function httpJson(method, url, payload, headers) {
+    const opts = {
+      method: method,
+      headers: Object.assign({ "Content-Type": "application/json", "Accept": "application/json" }, headers || {})
+    };
+    if (payload !== null && payload !== undefined) {
+      opts.body = JSON.stringify(payload);
+    }
+    const resp = await fetch(url, opts);
+    const text = await resp.text();
+    if (!resp.ok) {
+      throw new Error("HTTP " + resp.status + " " + resp.statusText + ": " + text);
+    }
+    return text ? JSON.parse(text) : {};
+  }
+
+  async function httpText(url, headers) {
+    const resp = await fetch(url, { headers: headers || {} });
+    const text = await resp.text();
+    if (!resp.ok) {
+      throw new Error("HTTP " + resp.status + " " + resp.statusText + ": " + text);
+    }
+    return text;
+  }
+
+  async function login() {
+    const r = await httpJson(
+      "POST",
+      BASE_URL + "/api/auth/login",
+      { username: USERNAME, password: PASSWORD },
+      {}
+    );
+    token = r.access_token;
+    return token;
+  }
+
+  async function fetchLastLapKind() {
+    const headers = token ? { "Authorization": "Bearer " + token } : {};
+    const resp = await httpJson("GET", BASE_URL + "/api/laps", null, headers);
+    const laps = resp && resp.laps ? resp.laps : [];
+    if (!laps.length) return null;
+
+    const lapId = laps[0].lap_id; // server връща ORDER BY start_time DESC
+    if (!lapId) return null;
+
+    // watcher-а ти качва kind='lap_' + lap_id (пример: lap_lap_20260120_110940)
+    return "lap_" + lapId;
+  }
+
+
+  function csvParse(text) {
+    const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (!lines.length) return { header: [], rows: [] };
+    const header = lines[0].split(",").map(s => s.trim());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(",").map(s => s.trim());
+      const obj = {};
+      for (let j = 0; j < header.length && j < parts.length; j++) {
+        obj[header[j]] = parts[j];
+      }
+      rows.push(obj);
+    }
+    return { header: header, rows: rows };
+  }
+
+  function toLatLngList(rows, latKey, lonKey) {
+    const out = [];
+    for (const r of rows) {
+      const lat = parseFloat(r[latKey]);
+      const lon = parseFloat(r[lonKey]);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        out.push([lat, lon]);
+      }
+    }
+    return out;
+  }
+
+  async function fetchBoundaries() {
+    const headers = token ? { "Authorization": "Bearer " + token } : {};
+    const text = await httpText(BASE_URL + "/api/track/" + TRACK_ID + "/boundaries", headers);
+    const parsed = csvParse(text);
+    const rows = parsed.rows;
+
+    const outer = toLatLngList(rows, "outer_lat", "outer_lon");
+    const inner = toLatLngList(rows, "inner_lat", "inner_lon");
+
+    if (outer.length > 1) {
+      if (layerOuter) layerOuter.setLatLngs(outer);
+      else layerOuter = L.polyline(outer, { weight: 4, opacity: 0.9 }).addTo(map);
+    }
+
+    if (inner.length > 1) {
+      if (layerInner) layerInner.setLatLngs(inner);
+      else layerInner = L.polyline(inner, { weight: 4, opacity: 0.9 }).addTo(map);
+    }
+
+    document.getElementById("bStatus").textContent =
+      (outer.length > 1 && inner.length > 1) ? (outer.length + " pts") : "missing";
+  }
+
+  async function fetchLine(kind) {
+    const headers = token ? { "Authorization": "Bearer " + token } : {};
+    const safe = (kind || "").replace(/[^a-zA-Z0-9_\-]/g, "") || "line";
+    const text = await httpText(BASE_URL + "/api/track/" + TRACK_ID + "/racing_line/" + safe, headers);
+    const parsed = csvParse(text);
+    const pts = toLatLngList(parsed.rows, "lat", "lon");
+    return { safe: safe, pts: pts };
+  }
+
+  async function refreshAll(trigger) {
+    if (fromWs && !liveMode) return;
+    if (refreshing) return;
+    refreshing = true;
+
+    try {
+      document.getElementById("evt").textContent = trigger || "refresh";
+
+      if (!token) {
+        await login();
+      }
+
+      try {
+        await fetchBoundaries();
+      } catch (e) {
+        document.getElementById("bStatus").textContent = "missing";
+      }
+
+      let kinds = Array.isArray(INITIAL_KINDS) ? INITIAL_KINDS.slice() : [];
+
+      // Auto-add newest lap kind
+      try {
+        const lastKind = await fetchLastLapKind();
+        if (lastKind) {
+          let exists = false;
+          for (const k of kinds) {
+            if (k === lastKind) { exists = true; break; }
+          }
+          if (!exists) kinds.unshift(lastKind);
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      let shown = 0;
+
+
+      for (const k of kinds) {
+        try {
+          const r = await fetchLine(k);
+          if (r.pts.length > 1) {
+            if (lineLayers.has(r.safe)) {
+              lineLayers.get(r.safe).setLatLngs(r.pts);
+            } else {
+              const layer = L.polyline(r.pts, { weight: 3, opacity: 0.95 }).addTo(map);
+              lineLayers.set(r.safe, layer);
+            }
+            shown++;
+          }
+        } catch (e) {
+          // ignore missing line
+        }
+      }
+
+      document.getElementById("lStatus").textContent = shown + " shown";
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  document.getElementById("refreshBtn").addEventListener("click", function() {
+    setLiveMode(!liveMode);
+  });
+
+
+
+  function connectWS() {
+    const wsUrl =
+      BASE_URL.replace("http://", "ws://")
+              .replace("https://", "wss://") +
+      "/ws/live";
+
+    if (wsRef) {
+      try { wsRef.close(); } catch (e) {}
+      wsRef = null;
+    }
+
+    const ws = new WebSocket(wsUrl);
+    wsRef = ws;
+
+    ws.onopen = function() {
+      document.getElementById("evt").textContent = "ws_connected";
+
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+      pingTimer = setInterval(function() {
+        try { ws.send("ping"); } catch (e) {}
+      }, 15000);
+    };
+
+    ws.onmessage = function(ev) {
+      let msg = null;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (!msg || !msg.type) return;
+
+      document.getElementById("evt").textContent = msg.type;
+
+      if (!liveMode) return;
+      if (ALLOW_EVENTS.has(msg.type)) {
+        refreshAll(msg.type, true);
+      }
+    };
+
+    ws.onclose = function() {
+      document.getElementById("evt").textContent = "ws_disconnected";
+
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+
+      setTimeout(connectWS, 1200);
+    };
+
+    ws.onerror = function() {
+      try { ws.close(); } catch (e) {}
+    };
+  }
+
+
+    ws.onclose = function() {
+      document.getElementById("evt").textContent = "ws_disconnected";
+
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+
+      setTimeout(connectWS, 1200);
+    };
+
+    ws.onerror = function() {
+      try { ws.close(); } catch (e) {}
+    };
+
+  setLiveMode(false);
+
+  connectWS();
+</script>
+
+
+</body>
+</html>

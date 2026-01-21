@@ -365,13 +365,20 @@ def find_corner_phases(curvature, ds_array, N):
 
 
 def add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N):
-    tol = 0.03  # 5 cm tolerance (примерно) — настрой според размерите на w_left/w_right
-    slack_apex = opti.variable(len(corner_phases['apex']))  # ако искаш slack
+    tol = 0.03  # tolerance
+
+    # ✅ Use single apices, not raw 'apex' phase list
+    single_apices = extract_single_apex_indices(curvature, corner_phases)
+
+    # ✅ If no apices -> do nothing (avoid empty opti.variable / subject_to)
+    if not single_apices:
+        return
+
+    # ✅ Slack size must match the loop below
+    slack_apex = opti.variable(len(single_apices))
     opti.set_initial(slack_apex, 0.0)
     opti.subject_to(slack_apex >= 0)
-    slack_weight = 1000.0  # penalize slack in objective (ако го ползваш)
 
-    single_apices = extract_single_apex_indices(curvature, corner_phases)
     for idx_i, apex_idx in enumerate(single_apices):
         if abs(curvature[apex_idx]) < 0.01:
             continue
@@ -381,9 +388,9 @@ def add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N):
         else:
             apex_target = -w_right[apex_idx] * 0.95
 
-        # жестко но с толеранс: apex_target +/- tol, допускаме slack_apex[idx_i]
         opti.subject_to(n[apex_idx] >= apex_target - tol - slack_apex[idx_i])
         opti.subject_to(n[apex_idx] <= apex_target + tol + slack_apex[idx_i])
+
 
 
 

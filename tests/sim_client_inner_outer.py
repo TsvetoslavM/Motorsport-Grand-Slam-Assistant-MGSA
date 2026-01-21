@@ -8,7 +8,7 @@ import sys
 import time
 import urllib.request
 from datetime import datetime, timezone, timedelta
-
+import csv
 
 def _http_json(method: str, url: str, payload: dict | None = None, headers: dict | None = None) -> dict:
     data = None
@@ -18,9 +18,15 @@ def _http_json(method: str, url: str, payload: dict | None = None, headers: dict
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, method=method, data=data, headers=hdrs)
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        body = resp.read().decode("utf-8")
-        return json.loads(body)
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body)
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        print(f"\n[HTTP {e.code}] {method} {url}\n{err_body}\n", file=sys.stderr)
+        raise
 
 
 def _login(base_url: str, username: str, password: str) -> str:
@@ -62,6 +68,22 @@ def _build_boundaries(base_url: str, token: str, track_id: str, inner_lap_id: st
         {"outer_lap_id": outer_lap_id, "inner_lap_id": inner_lap_id, "n_points": int(n_points)},
         headers=headers,
     )
+
+def _optimize_from_track_boundaries(base_url: str, token: str, track_id: str, n_points: int) -> dict:
+    headers = {"Authorization": f"Bearer {token}"}
+    return _http_json(
+        "POST",
+        f"{base_url}/api/trajectory/optimize_from_track_boundaries",
+        {
+            "track_id": track_id,
+            "n_points": int(n_points),
+            "return_latlon": True,
+            "ipopt_linear_solver": "ma57",
+            "ipopt_print_level": 5
+        },
+        headers=headers,
+    )
+
 
 
 def _meters_to_latlon(dx_east_m: float, dy_north_m: float, lat0: float, lon0: float) -> tuple[float, float]:
@@ -164,6 +186,13 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--realtime", action="store_true", help="Sleep between points to mimic live streaming.")
     ap.add_argument("--build-boundaries", action="store_true", help="Call /boundaries/build after both laps.")
+
+    ap.add_argument(
+        "--optimize",
+        action="store_true",
+        help="Call /api/trajectory/optimize_from_track_boundaries after boundaries exist."
+    )
+
     args = ap.parse_args()
 
     dt_s = 1.0 / max(0.1, float(args.hz))
@@ -242,6 +271,35 @@ def main() -> int:
         print("\n[*] Building boundaries.csv on server...")
         resp = _build_boundaries(args.base_url, token, args.track_id, inner_lap_id, outer_lap_id, n_points=n)
         print(f"[OK] boundaries/build: {resp}")
+
+    if args.optimize:
+        print("\n[*] Optimizing ideal trajectory from boundaries.csv (solver)...")
+        resp = _optimize_from_track_boundaries(args.base_url, token, args.track_id, n_points=n)
+        print(f"[OK] optimize: converged={resp.get('converged')} lap_time_s={resp.get('lap_time_s')} N={resp.get('N')}")
+
+        # Save full json
+        out_json = f"ideal_{args.track_id}.json"
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump(resp, f, ensure_ascii=False, indent=2)
+        print(f"[OK] Saved: {out_json}")
+
+        # Save optimal as CSV (lat/lon if present; else x/y)
+        if isinstance(resp.get("optimal_latlon"), list) and resp["optimal_latlon"]:
+            out_csv = f"ideal_{args.track_id}_optimal_latlon.csv"
+            with open(out_csv, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["i", "lat", "lon", "time_s", "speed_kmh"])
+                for i, p in enumerate(resp["optimal_latlon"]):
+                    w.writerow([i, p.get("lat"), p.get("lon"), p.get("time_s"), p.get("speed_kmh")])
+            print(f"[OK] Saved: {out_csv}")
+        else:
+            out_csv = f"ideal_{args.track_id}_optimal_xy.csv"
+            with open(out_csv, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["i", "x", "y", "time_s", "speed_kmh"])
+                for i, p in enumerate(resp.get("optimal", [])):
+                    w.writerow([i, p.get("x"), p.get("y"), p.get("time_s"), p.get("speed_kmh")])
+            print(f"[OK] Saved: {out_csv}")
 
     return 0
 

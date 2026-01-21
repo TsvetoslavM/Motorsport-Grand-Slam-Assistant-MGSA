@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MGSA Track Compare — mytrack</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+
+    html, body { margin:0; padding:0; background:#0b1220; height:100%; }
+    .checkered-bg { background: repeating-linear-gradient(45deg,#000,#000 16px,#fff 16px,#fff 32px); height: 4px; }
+
+    .header {
+      padding:18px 22px;
+      background:linear-gradient(135deg,#1a1a1a 0%,#0d0d0d 100%);
+      color:#fff;
+      border-bottom:3px solid #dc2626;
+    }
+    .container { max-width:1200px; margin:0 auto; padding:0 22px; }
+    .title {
+      font-family:'Orbitron',sans-serif;
+      font-size:22px;
+      font-weight:900;
+      letter-spacing:2px;
+      text-transform:uppercase;
+      color:#dc2626;
+    }
+    .kicker {
+      font-family:'Orbitron',sans-serif;
+      font-size:12px;
+      color:#fbbf24;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:1px;
+    }
+    .text {
+      background:#0f172a;
+      border-bottom:2px solid #1e293b;
+      padding:16px 0;
+      color:#e2e8f0;
+      font-family:'Orbitron',sans-serif;
+      line-height:1.6;
+    }
+    .legend {
+      margin-top:10px;
+      font-size:13px;
+      color:#94a3b8;
+      padding:10px;
+      background:#1e293b;
+      border-left:3px solid #dc2626;
+      border-radius:4px;
+    }
+
+    .map-wrap { background:#0b1220; padding:16px 0; }
+    #map {
+      width:100%;
+      height:72vh;
+      border-radius:10px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.35);
+      background:#0b1220;
+      border: 1px solid rgba(148,163,184,0.18);
+    }
+
+    .hud {
+      position:absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 9999;
+      background: rgba(15,23,42,0.92);
+      color:#e2e8f0;
+      border: 1px solid rgba(148,163,184,0.25);
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+      max-width: 560px;
+    }
+    .row { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+    .dot {
+      width:10px; height:10px; border-radius: 999px;
+      background:#22c55e; display:inline-block;
+      box-shadow: 0 0 14px rgba(34,197,94,0.55);
+    }
+    .small { font-size:12px; opacity:0.92; }
+    .muted { color:#94a3b8; }
+    .btn {
+      cursor:pointer; user-select:none;
+      padding:6px 10px; border-radius:10px;
+      border: 1px solid rgba(148,163,184,0.25);
+      background: rgba(30,41,59,0.65);
+      color:#e2e8f0;
+      font-size:12px;
+    }
+    .btn:hover { background: rgba(30,41,59,0.9); }
+
+    .footer {
+      padding:14px 0;
+      background:linear-gradient(135deg,#0d0d0d 0%,#1a1a1a 100%);
+      color:#94a3b8;
+      border-top:2px solid #1e293b;
+      font-family:'Orbitron',sans-serif;
+      font-size:11px;
+    }
+    .footer-row {
+      display:flex; justify-content:space-between;
+      gap:16px; flex-wrap:wrap; align-items:center;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="checkered-bg"></div>
+
+  <div class="header">
+    <div class="container" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div class="title">🏁 MGSA Track Compare — mytrack</div>
+      <div class="kicker">Always refreshing • http://localhost:8000</div>
+    </div>
+  </div>
+
+  <div class="text">
+    <div class="container">
+      <div class="legend"><b>Always refreshing</b> (poll).<br/>Shows <b>only the latest</b> racing line (auto-detected from /api/laps).<br/><span style='color:#fbbf24'>Camera:</span> never auto-fit; you control zoom/pan.</div>
+    </div>
+  </div>
+
+  <div class="map-wrap">
+    <div class="container" style="position:relative;">
+      <div id="map"></div>
+
+      <div class="hud">
+        <div class="row">
+          <div><span class="dot"></span> <b>LIVE</b> <span class="muted">track:</span> <span id="track">mytrack</span></div>
+          <div class="btn" id="refreshBtn">Refresh now</div>
+        </div>
+        <div class="small muted" style="margin-top:6px;">
+          <div>Boundaries: <span id="bStatus">?</span></div>
+          <div>Line: <span id="lStatus">?</span></div>
+          <div>Last event: <span id="evt">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="checkered-bg"></div>
+
+  <div class="footer">
+    <div class="container footer-row">
+      <div style="font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;">MGSA • Field Test</div>
+      <div style="color:#64748b;">Polling: 1000 ms • Latest line only</div>
+    </div>
+  </div>
+
+<script>
+  const BASE_URL = "http://localhost:8000";
+  const TRACK_ID = "mytrack";
+  const USERNAME = "admin";
+  const PASSWORD = "admin123";
+  const POLL_MS = 1000;
+
+  let token = null;
+
+  const map = L.map('map', { zoomControl: true }).setView([42.7144, 23.2743], 17);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 20,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  let layerOuter = null;
+  let layerInner = null;
+
+  // We'll keep ONLY ONE line layer (latest), but use a Map for easy swap.
+  let lineLayers = new Map();
+  let lastShownKind = null;
+
+  let refreshing = false;
+  let pollTimer = null;
+
+  async function httpJson(method, url, payload, headers) {
+    const opts = {
+      method: method,
+      headers: Object.assign({ "Content-Type": "application/json", "Accept": "application/json" }, headers || {})
+    };
+    if (payload !== null && payload !== undefined) {
+      opts.body = JSON.stringify(payload);
+    }
+    const resp = await fetch(url, opts);
+    const text = await resp.text();
+    if (!resp.ok) {
+      throw new Error("HTTP " + resp.status + " " + resp.statusText + ": " + text);
+    }
+    return text ? JSON.parse(text) : {};
+  }
+
+  async function httpText(url, headers) {
+    const resp = await fetch(url, { headers: headers || {} });
+    const text = await resp.text();
+    if (!resp.ok) {
+      throw new Error("HTTP " + resp.status + " " + resp.statusText + ": " + text);
+    }
+    return text;
+  }
+
+  async function login() {
+    const r = await httpJson(
+      "POST",
+      BASE_URL + "/api/auth/login",
+      { username: USERNAME, password: PASSWORD },
+      {}
+    );
+    token = r.access_token;
+    return token;
+  }
+
+  async function fetchLastLapKind() {
+    const headers = token ? { "Authorization": "Bearer " + token } : {};
+    const resp = await httpJson("GET", BASE_URL + "/api/laps", null, headers);
+    const laps = resp && resp.laps ? resp.laps : [];
+    if (!laps.length) return null;
+
+    const lapId = laps[0].lap_id; // server should return ORDER BY start_time DESC
+    if (!lapId) return null;
+
+    // If lapId already starts with "lap_", avoid "lap_lap_..."
+    if (String(lapId).startsWith("lap_")) {
+      return String(lapId);
+    }
+    return "lap_" + String(lapId);
+  }
+
+  function csvParse(text) {
+    const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (!lines.length) return { header: [], rows: [] };
+    const header = lines[0].split(",").map(s => s.trim());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(",").map(s => s.trim());
+      const obj = {};
+      for (let j = 0; j < header.length && j < parts.length; j++) {
+        obj[header[j]] = parts[j];
+      }
+      rows.push(obj);
+    }
+    return { header: header, rows: rows };
+  }
+
+  function toLatLngList(rows, latKey, lonKey) {
+    const out = [];
+    for (const r of rows) {
+      const lat = parseFloat(r[latKey]);
+      const lon = parseFloat(r[lonKey]);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        out.push([lat, lon]);
+      }
+    }
+    return out;
+  }
+
+  async function fetchBoundaries() {
+    const headers = token ? { "Authorization": "Bearer " + token } : {};
+    const text = await httpText(BASE_URL + "/api/track/" + TRACK_ID + "/boundaries", headers);
+    const parsed = csvParse(text);
+    const rows = parsed.rows;
+
+    const outer = toLatLngList(rows, "outer_lat", "outer_lon");
+    const inner = toLatLngList(rows, "inner_lat", "inner_lon");
+
+    if (outer.length > 1) {
+      if (layerOuter) layerOuter.setLatLngs(outer);
+      else layerOuter = L.polyline(outer, { weight: 4, opacity: 0.9 }).addTo(map);
+    }
+
+    if (inner.length > 1) {
+      if (layerInner) layerInner.setLatLngs(inner);
+      else layerInner = L.polyline(inner, { weight: 4, opacity: 0.9 }).addTo(map);
+    }
+
+    document.getElementById("bStatus").textContent =
+      (outer.length > 1 && inner.length > 1) ? (outer.length + " pts") : "missing";
+  }
+
+  async function fetchLine(kind) {
+    const headers = token ? { "Authorization": "Bearer " + token } : {};
+    const safe = (kind || "").replace(/[^a-zA-Z0-9_\-]/g, "") || "line";
+    const text = await httpText(BASE_URL + "/api/track/" + TRACK_ID + "/racing_line/" + safe, headers);
+    const parsed = csvParse(text);
+    const pts = toLatLngList(parsed.rows, "lat", "lon");
+    return { safe: safe, pts: pts };
+  }
+
+  async function refreshLatestOnly(trigger) {
+    if (refreshing) return;
+    refreshing = true;
+
+    try {
+      document.getElementById("evt").textContent = trigger || "poll";
+
+      if (!token) {
+        await login();
+      }
+
+      // Boundaries each poll (simple). If you want slower boundaries refresh, tell me.
+      try {
+        await fetchBoundaries();
+      } catch (e) {
+        document.getElementById("bStatus").textContent = "missing";
+      }
+
+      const kind = await fetchLastLapKind();
+      if (!kind) {
+        document.getElementById("lStatus").textContent = "no laps";
+        return;
+      }
+
+      const r = await fetchLine(kind);
+      if (!r.pts || r.pts.length <= 1) {
+        document.getElementById("lStatus").textContent = "empty";
+        return;
+      }
+
+      if (lastShownKind !== r.safe) {
+        for (const [k, layer] of lineLayers.entries()) {
+          try { map.removeLayer(layer); } catch (e) {}
+        }
+        lineLayers.clear();
+        lastShownKind = r.safe;
+      }
+
+      if (lineLayers.has(r.safe)) {
+        lineLayers.get(r.safe).setLatLngs(r.pts);
+      } else {
+        const layer = L.polyline(r.pts, { weight: 3, opacity: 0.95 }).addTo(map);
+        lineLayers.set(r.safe, layer);
+      }
+
+      document.getElementById("lStatus").textContent =
+        "latest: " + r.safe + " (" + r.pts.length + " pts)";
+    } catch (e) {
+      document.getElementById("lStatus").textContent = "error";
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    refreshLatestOnly("poll_start");
+    pollTimer = setInterval(function() {
+      refreshLatestOnly("poll");
+    }, POLL_MS);
+  }
+
+  document.getElementById("refreshBtn").addEventListener("click", function() {
+    refreshLatestOnly("button");
+  });
+
+  startPolling();
+</script>
+
+</body>
+</html>

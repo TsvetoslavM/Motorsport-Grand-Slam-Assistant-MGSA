@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MGSA Track Compare — mytrack</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+    html, body { margin:0; padding:0; background:#0b1220; }
+    .checkered-bg { background: repeating-linear-gradient(45deg,#000,#000 16px,#fff 16px,#fff 32px); height: 4px; }
+    .header { padding:18px 22px; background:linear-gradient(135deg,#1a1a1a 0%,#0d0d0d 100%); color:#fff; border-bottom:3px solid #dc2626; }
+    .container { max-width:1200px; margin:0 auto; padding:0 22px; }
+    .title { font-family:'Orbitron',sans-serif; font-size:22px; font-weight:900; letter-spacing:2px; text-transform:uppercase; color:#dc2626; }
+    .kicker { font-family:'Orbitron',sans-serif; font-size:12px; color:#fbbf24; font-weight:700; text-transform:uppercase; letter-spacing:1px; }
+    .text { background:#0f172a; border-bottom:2px solid #1e293b; padding:16px 0; color:#e2e8f0; font-family:'Orbitron',sans-serif; line-height:1.6; }
+    .legend { margin-top:10px; font-size:13px; color:#94a3b8; padding:10px; background:#1e293b; border-left:3px solid #dc2626; border-radius:4px; }
+    .map-wrap { background:#0b1220; padding:16px 0; }
+    iframe { width:100%; height:72vh; border:0; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,0.35); background:#0b1220; }
+    .footer { padding:14px 0; background:linear-gradient(135deg,#0d0d0d 0%,#1a1a1a 100%); color:#94a3b8; border-top:2px solid #1e293b; font-family:'Orbitron',sans-serif; font-size:11px; }
+    .footer-row { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; align-items:center; }
+  </style>
+</head>
+<body>
+  <div class="checkered-bg"></div>
+  <div class="header">
+    <div class="container" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div class="title">🏁 MGSA Track Compare — mytrack</div>
+      <div class="kicker">Live view • http://localhost:8000</div>
+    </div>
+  </div>
+  <div class="text">
+    <div class="container">
+      <div class="legend"><b>Live:</b> boundaries + racing lines.<br/>When new laps arrive, the view refreshes automatically via WebSocket.<br/><span style='color:#fbbf24'>Tip:</span> keep this page open while recording.</div>
+    </div>
+  </div>
+  <div class="map-wrap">
+    <div class="container">
+      <iframe srcdoc="&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+  &lt;meta charset=&quot;utf-8&quot;/&gt;
+  &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;/&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;https://unpkg.com/leaflet@1.9.4/dist/leaflet.css&quot;/&gt;
+  &lt;script src=&quot;https://unpkg.com/leaflet@1.9.4/dist/leaflet.js&quot;&gt;&lt;/script&gt;
+  &lt;style&gt;
+    html, body, #map { height: 100%; margin: 0; background:#0b1220; }
+    .hud {
+      position: absolute; top: 10px; left: 10px; z-index: 9999;
+      background: rgba(15,23,42,0.92); color:#e2e8f0;
+      border: 1px solid rgba(148,163,184,0.25);
+      padding: 10px 12px; border-radius: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+      max-width: 420px;
+    }
+    .row { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+    .dot {
+      width:10px; height:10px; border-radius: 999px; background:#fbbf24; display:inline-block;
+      box-shadow: 0 0 14px rgba(251,191,36,0.55);
+    }
+    .small { font-size:12px; opacity:0.85; }
+    .muted { color:#94a3b8; }
+    .btn {
+      cursor:pointer; user-select:none;
+      padding:6px 10px; border-radius:8px;
+      border: 1px solid rgba(148,163,184,0.25);
+      background: rgba(30,41,59,0.65);
+      color:#e2e8f0;
+      font-size:12px;
+    }
+    .btn:hover { background: rgba(30,41,59,0.9); }
+  &lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;map&quot;&gt;&lt;/div&gt;
+&lt;div class=&quot;hud&quot;&gt;
+  &lt;div class=&quot;row&quot;&gt;
+    &lt;div&gt;&lt;span class=&quot;dot&quot;&gt;&lt;/span&gt; &lt;b&gt;LIVE&lt;/b&gt; &lt;span class=&quot;muted&quot;&gt;track:&lt;/span&gt; &lt;span id=&quot;track&quot;&gt;mytrack&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;btn&quot; id=&quot;refreshBtn&quot;&gt;Refresh&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;small muted&quot; style=&quot;margin-top:6px;&quot;&gt;
+    &lt;div&gt;Boundaries: &lt;span id=&quot;bStatus&quot;&gt;?&lt;/span&gt;&lt;/div&gt;
+    &lt;div&gt;Lines: &lt;span id=&quot;lStatus&quot;&gt;?&lt;/span&gt;&lt;/div&gt;
+    &lt;div&gt;Last event: &lt;span id=&quot;evt&quot;&gt;—&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;script&gt;
+  const BASE_URL = &quot;http://localhost:8000&quot;;
+  const TRACK_ID = &quot;mytrack&quot;;
+  const USERNAME = &quot;admin&quot;;
+  const PASSWORD = &quot;admin123&quot;;
+  const INITIAL_KINDS = [&quot;lap_lap_20260120_102953&quot;, &quot;optimal&quot;];
+
+  let token = null;
+  let didInitialFit = false;
+
+
+  async function httpJson(method, url, payload=null, headers={}) {
+    const opts = {
+      method,
+      headers: Object.assign({&quot;Content-Type&quot;:&quot;application/json&quot;,&quot;Accept&quot;:&quot;application/json&quot;}, headers),
+    };
+    if (payload !== null) opts.body = JSON.stringify(payload);
+    const resp = await fetch(url, opts);
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${text}`);
+    return text ? JSON.parse(text) : {};
+  }
+
+  async function httpText(url, headers={}) {
+    const resp = await fetch(url, { headers });
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${text}`);
+    return text;
+  }
+
+  async function login() {
+    const r = await httpJson(&quot;POST&quot;, `${BASE_URL}/api/auth/login`, {username: USERNAME, password: PASSWORD});
+    token = r.access_token;
+    return token;
+  }
+
+  function csvParse(text) {
+    const lines = text.split(/\r?\n/).map(s =&gt; s.trim()).filter(Boolean);
+    if (!lines.length) return {header:[], rows:[]};
+    const header = lines[0].split(&quot;,&quot;).map(s =&gt; s.trim());
+    const rows = [];
+    for (let i=1;i&lt;lines.length;i++) {
+      const parts = lines[i].split(&quot;,&quot;).map(s =&gt; s.trim());
+      const obj = {};
+      for (let j=0;j&lt;header.length &amp;&amp; j&lt;parts.length;j++) obj[header[j]] = parts[j];
+      rows.push(obj);
+    }
+    return {header, rows};
+  }
+
+  function toLatLngList(rows, latKey, lonKey) {
+    const out = [];
+    for (const r of rows) {
+      const lat = parseFloat(r[latKey]);
+      const lon = parseFloat(r[lonKey]);
+      if (Number.isFinite(lat) &amp;&amp; Number.isFinite(lon)) out.push([lat, lon]);
+    }
+    return out;
+  }
+
+  const map = L.map(&#x27;map&#x27;, { zoomControl: true }).setView([42.7144, 23.2743], 17);
+  L.tileLayer(&#x27;https://tile.openstreetmap.org/{z}/{x}/{y}.png&#x27;, {
+    maxZoom: 20,
+    attribution: &#x27;&amp;copy; OpenStreetMap&#x27;
+  }).addTo(map);
+
+  let layerOuter = null;
+  let layerInner = null;
+  let lineLayers = new Map();
+
+  function fitAll(boundsList) {
+    const good = boundsList.filter(b =&gt; b);
+    if (!good.length) return;
+    let b = good[0];
+    for (let i=1;i&lt;good.length;i++) b = b.extend(good[i]);
+    map.fitBounds(b.pad(0.10));
+  }
+
+  async function fetchBoundaries() {
+    const headers = token ? { &quot;Authorization&quot;: `Bearer ${token}` } : {};
+    try {
+      const text = await httpText(`${BASE_URL}/api/track/${TRACK_ID}/boundaries`, headers);
+      const { rows } = csvParse(text);
+      const outer = toLatLngList(rows, &quot;outer_lat&quot;, &quot;outer_lon&quot;);
+      const inner = toLatLngList(rows, &quot;inner_lat&quot;, &quot;inner_lon&quot;);
+
+        if (outer.length &gt; 1) {
+        if (layerOuter) layerOuter.setLatLngs(outer);
+        else layerOuter = L.polyline(outer, { weight: 4, opacity: 0.9 }).addTo(map);
+        } else {
+        if (layerOuter) { map.removeLayer(layerOuter); layerOuter = null; }
+        }
+
+        if (inner.length &gt; 1) {
+        if (layerInner) layerInner.setLatLngs(inner);
+        else layerInner = L.polyline(inner, { weight: 4, opacity: 0.9 }).addTo(map);
+        } else {
+        if (layerInner) { map.removeLayer(layerInner); layerInner = null; }
+        }
+
+
+      document.getElementById(&quot;bStatus&quot;).textContent = outer.length &amp;&amp; inner.length ? `${outer.length} pts` : &quot;missing&quot;;
+      return {
+        outerBounds: layerOuter ? layerOuter.getBounds() : null,
+        innerBounds: layerInner ? layerInner.getBounds() : null
+      };
+    } catch (e) {
+      document.getElementById(&quot;bStatus&quot;).textContent = &quot;missing&quot;;
+      if (layerOuter) { map.removeLayer(layerOuter); layerOuter = null; }
+      if (layerInner) { map.removeLayer(layerInner); layerInner = null; }
+      return { outerBounds: null, innerBounds: null };
+    }
+  }
+
+  async function fetchLine(kind) {
+    const headers = token ? { &quot;Authorization&quot;: `Bearer ${token}` } : {};
+    const safe = (kind || &quot;&quot;).replace(/[^a-zA-Z0-9_\-]/g, &quot;&quot;) || &quot;line&quot;;
+    const text = await httpText(`${BASE_URL}/api/track/${TRACK_ID}/racing_line/${safe}`, headers);
+    const { rows } = csvParse(text);
+    const pts = toLatLngList(rows, &quot;lat&quot;, &quot;lon&quot;);
+    return { safe, pts };
+  }
+
+  async function refreshAll(trigger=&quot;manual&quot;) {
+    document.getElementById(&quot;evt&quot;).textContent = trigger;
+
+    if (!token) {
+      await login();
+    }
+
+    const b = await fetchBoundaries();
+
+    const boundsList = [];
+    if (b.outerBounds) boundsList.push(b.outerBounds);
+    if (b.innerBounds) boundsList.push(b.innerBounds);
+
+    let kinds = Array.isArray(INITIAL_KINDS) ? [...INITIAL_KINDS] : [];
+    if (!kinds.length) {
+      // if not specified, keep showing whatever we already have (none initially)
+      // user can still pass --also-kinds in watcher to include e.g. optimal
+    }
+
+    let shown = 0;
+    for (const k of kinds) {
+      try {
+        const { safe, pts } = await fetchLine(k);
+        if (pts.length &gt; 1) {
+        if (lineLayers.has(safe)) {
+            lineLayers.get(safe).setLatLngs(pts);
+        } else {
+            const layer = L.polyline(pts, { weight: 3, opacity: 0.95 }).addTo(map);
+            lineLayers.set(safe, layer);
+        }
+        shown++;
+        }
+
+      } catch (e) {
+        // ignore missing line
+      }
+    }
+
+    document.getElementById(&quot;lStatus&quot;).textContent = `${shown} shown`;
+    if (!didInitialFit) {
+        fitAll(boundsList);
+        didInitialFit = true;
+        }
+
+  }
+
+  document.getElementById(&quot;refreshBtn&quot;).addEventListener(&quot;click&quot;, () =&gt; refreshAll(&quot;button&quot;));
+
+  function connectWS() {
+    const wsUrl = BASE_URL.replace(&quot;http://&quot;, &quot;ws://&quot;).replace(&quot;https://&quot;, &quot;wss://&quot;) + &quot;/ws/live&quot;;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () =&gt; {
+      document.getElementById(&quot;evt&quot;).textContent = &quot;ws_connected&quot;;
+      setInterval(() =&gt; {
+        try { ws.send(&quot;ping&quot;); } catch (e) {}
+      }, 15000);
+    };
+
+    ws.onmessage = (ev) =&gt; {
+      let msg = null;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (!msg || !msg.type) return;
+
+      const t = msg.type;
+      document.getElementById(&quot;evt&quot;).textContent = t;
+
+      if (t === &quot;lap_completed&quot; || t === &quot;boundaries_ready&quot; || t === &quot;boundaries_updated&quot; || t === &quot;racing_line_updated&quot;) {
+        refreshAll(t);
+      }
+    };
+
+    ws.onclose = () =&gt; {
+      document.getElementById(&quot;evt&quot;).textContent = &quot;ws_disconnected&quot;;
+      setTimeout(connectWS, 1200);
+    };
+
+    ws.onerror = () =&gt; {
+      try { ws.close(); } catch (e) {}
+    };
+  }
+
+  refreshAll(&quot;init&quot;).then(() =&gt; connectWS());
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+    </div>
+  </div>
+  <div class="checkered-bg"></div>
+  <div class="footer">
+    <div class="container footer-row">
+      <div style="font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;">MGSA • Field Test</div>
+      <div style="color:#64748b;">WebSocket live updates</div>
+    </div>
+  </div>
+</body>
+</html>

@@ -50,6 +50,10 @@ class BoundarySample(BaseModel):
 class BoundariesUpload(BaseModel):
     samples: List[BoundarySample]
 
+class StartLapRequest(BaseModel):
+    track_name: str
+    lap_type: str = "racing"  # "inner" | "outer" | "racing"
+
 
 class RacingPoint(BaseModel):
     time_s: float
@@ -57,7 +61,10 @@ class RacingPoint(BaseModel):
     lon: float
     speed_kmh: float
 
-
 class RacingLineUpload(BaseModel):
     kind: str = Field("optimal", description="Тип линия: 'optimal', 'driver', и т.н.")
     points: List[RacingPoint]
+
+class BuildRacingLineFromLapRequest(BaseModel):
+    lap_id: str
+    kind: str = Field("driver", description="racing line kind, e.g. driver/racing/optimal")

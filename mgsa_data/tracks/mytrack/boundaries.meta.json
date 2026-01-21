@@ -1,1 +1,1 @@
-{"updated": "2026-01-19T21:30:43.503478+00:00", "track_id": "mytrack", "source": "json_upload", "samples": 400, "path": "mgsa_data\\tracks\\mytrack\\boundaries.csv"}
+{"updated": "2026-01-21T09:25:18.136844+00:00", "track_id": "mytrack", "outer_lap_id": "lap_20260121_112330", "inner_lap_id": "lap_20260121_112142", "n_points": 50, "path": "mgsa_data\\tracks\\mytrack\\boundaries.csv"}

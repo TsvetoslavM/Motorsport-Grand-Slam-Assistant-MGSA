@@ -1,1 +1,12 @@
-*.html
+# =========================
+# MGSA generated data
+# =========================
+mgsa_data/
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.idea/
+compare_*.*
+ideal_*.*
+# *.html
