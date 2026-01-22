@@ -29,10 +29,6 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class StartLapRequest(BaseModel):
-    track_name: str
-
-
 class BuildBoundariesRequest(BaseModel):
     outer_lap_id: str
     inner_lap_id: str

@@ -17,6 +17,8 @@ from ..tracks import track_path
 import json
 from ..routes.track_routes import build_racing_line_from_lap
 from ..models import BuildRacingLineFromLapRequest
+from ..analysis_routes import compare_driver_vs_optimal_internal
+
 
 
 logger = logging.getLogger("mgsa-server")
@@ -98,6 +100,17 @@ async def stop_lap(token: dict = Depends(verify_token)):
             )
         )
 
+    if track_name and lap_type == "driver":
+        await build_racing_line_from_lap(
+            track_id=track_name,
+            req=BuildRacingLineFromLapRequest(lap_id=lap_id, kind="driver"),
+            token=token,
+        )
+
+    if track_name and lap_type == "driver":
+        asyncio.create_task(_auto_compare_driver(track_name, token, point_count))
+
+
     return {"lap_id": lap_id, "lap_time": lap_time, "points": point_count, "status": "saved"}
 
 @router.get("/{lap_id}")
@@ -107,3 +120,55 @@ async def get_lap_data(lap_id: str, token: dict = Depends(verify_token)):
         raise HTTPException(status_code=404, detail="Lap not found")
     points = load_lap_points(lap_id)
     return {"info": lap, "points": points}
+
+from ..tracks import track_path
+from ..analysis_routes import compare as compare_endpoint
+import time
+
+async def _wait_for_file(path: Path, timeout_s: float = 30.0, poll_s: float = 0.2) -> bool:
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        if path.exists() and path.stat().st_size > 10:
+            return True
+        await asyncio.sleep(poll_s)
+    return False
+
+
+async def _auto_compare_driver(track_id: str, token: dict, point_count: int) -> None:
+    root = track_path(track_id)
+    optimal_json = root / "optimal.json"
+    driver_csv = root / "racing_driver.csv"
+
+    ok_opt = await _wait_for_file(optimal_json, timeout_s=60.0)
+    ok_drv = await _wait_for_file(driver_csv, timeout_s=10.0)
+
+    if not ok_drv:
+        await manager.broadcast({"type": "driver_vs_optimal_failed", "track_id": track_id, "error": "missing racing_driver.csv"})
+        return
+    if not ok_opt:
+        await manager.broadcast({"type": "driver_vs_optimal_failed", "track_id": track_id, "error": "optimal not ready (optimal.json missing)"})
+        return
+
+    from ..analysis_routes import CompareRequest
+    from ..analysis_routes import save_compare_json
+
+    N = min(900, max(100, int(point_count)))
+
+    payload = await compare_endpoint(
+        track_id,
+        CompareRequest(driver_kind="driver", n_points=N, segment_len_m=20.0, ipopt_print_level=0),
+        token=token,
+    )
+
+    out_path = root / "compare_driver_vs_optimal.json"
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    await manager.broadcast({
+        "type": "driver_vs_optimal_ready",
+        "track_id": track_id,
+        "n_points": N,
+        "artifacts": {
+            "compare_json": f"/api/track/{track_id}/compare_driver_vs_optimal.json",
+        },
+        "summary": payload.get("stats", {}),
+    })

@@ -275,3 +275,14 @@ async def compare(track_id: str, req: CompareRequest, token: dict = Depends(veri
         },
     }
     return resp
+
+async def compare_driver_vs_optimal_internal(track_id: str, driver_kind: str = "driver", n_points: int = 250) -> dict:
+    req = CompareRequest(driver_kind=driver_kind, n_points=n_points)
+    dummy_token = {"sub": "internal"}  # verify_token не се ползва вътре
+    return await compare(track_id, req, token=dummy_token)
+
+def save_compare_json(track_id: str, payload: dict, driver_kind: str = "driver") -> str:
+    p = track_path(track_id) / f"compare_{safe_kind(driver_kind)}_vs_optimal.json"
+    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(p)
+

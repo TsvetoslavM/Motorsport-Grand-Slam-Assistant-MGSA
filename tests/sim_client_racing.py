@@ -191,14 +191,17 @@ def main() -> int:
         dt_s=dt_s,
     )
 
-    track_name = f"{args.track_id}_{args.lap_type}"
+    track_name = args.track_id
     lap_id = _start_lap(args.base_url, token, track_name=track_name, lap_type=str(args.lap_type))
     print(f"[OK] Started lap: {lap_id} track_name={track_name} lap_type={args.lap_type}")
 
-    for p in pts:
+    for i, p in enumerate(pts, 1):
         _send_point(args.base_url, token, p)
+        if i % 50 == 0 or i == len(pts):
+            print(f"  sent {i}/{len(pts)}")
         if args.realtime:
             time.sleep(dt_s)
+
 
     res = _stop_lap(args.base_url, token)
     print(f"[OK] Stopped lap: {lap_id} lap_time={res.get('lap_time')} points={res.get('points')}")

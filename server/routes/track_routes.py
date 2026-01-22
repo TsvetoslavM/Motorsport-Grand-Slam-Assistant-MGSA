@@ -262,3 +262,11 @@ async def get_optimal_latlon_csv(track_id: str, token: dict = Depends(verify_tok
         }
     })
     return FileResponse(str(p), media_type="text/csv", filename="optimal_latlon.csv")
+
+@router.get("/{track_id}/compare_driver_vs_optimal.json")
+async def get_compare_driver_vs_optimal(track_id: str, token: dict = Depends(verify_token)):
+    p = track_path(track_id) / "compare_driver_vs_optimal.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="compare json not found")
+    return FileResponse(str(p), media_type="application/json", filename="compare_driver_vs_optimal.json")
+
