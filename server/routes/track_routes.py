@@ -13,6 +13,8 @@ from ..tracks import (
 )
 from ..runtime import now_iso
 from ..ws import manager
+from pathlib import Path
+
 
 router = APIRouter(prefix="/api/track", tags=["tracks"])
 
@@ -223,3 +225,40 @@ async def build_racing_line_from_lap(track_id: str, req: BuildRacingLineFromLapR
 
     await manager.broadcast({"type": "racing_line_updated", "track_id": track_id, "kind": kind, "updated": now_iso()})
     return {"status": "ok", "track_id": track_id, "kind": kind, "points": len(pts), "path": str(out)}
+
+@router.get("/{track_id}/optimal.json")
+async def get_optimal_json(track_id: str, token: dict = Depends(verify_token)):
+    p = track_path(track_id) / "optimal.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="optimal.json not found")
+
+    await manager.broadcast({
+        "type": "optimal_ready",
+        "track_id": track_id,
+        "updated": now_iso(),
+        "artifacts": {
+            "optimal_json": f"/api/track/{track_id}/optimal.json",
+            "optimal_latlon_csv": f"/api/track/{track_id}/optimal_latlon.csv",
+            "boundaries_csv": f"/api/track/{track_id}/boundaries",
+        }
+    })
+    return FileResponse(str(p), media_type="application/json", filename="optimal.json")
+
+
+@router.get("/{track_id}/optimal_latlon.csv")
+async def get_optimal_latlon_csv(track_id: str, token: dict = Depends(verify_token)):
+    p = track_path(track_id) / "optimal_latlon.csv"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="optimal_latlon.csv not found")
+
+    await manager.broadcast({
+        "type": "optimal_ready",
+        "track_id": track_id,
+        "updated": now_iso(),
+        "artifacts": {
+            "optimal_json": f"/api/track/{track_id}/optimal.json",
+            "optimal_latlon_csv": f"/api/track/{track_id}/optimal_latlon.csv",
+            "boundaries_csv": f"/api/track/{track_id}/boundaries",
+        }
+    })
+    return FileResponse(str(p), media_type="text/csv", filename="optimal_latlon.csv")

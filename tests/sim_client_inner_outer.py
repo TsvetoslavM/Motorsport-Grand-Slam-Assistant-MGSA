@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import random
 import sys
 import time
+import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
-import csv
+
 
 def _http_json(method: str, url: str, payload: dict | None = None, headers: dict | None = None) -> dict:
     data = None
@@ -29,14 +32,31 @@ def _http_json(method: str, url: str, payload: dict | None = None, headers: dict
         raise
 
 
+def _http_bytes(method: str, url: str, headers: dict | None = None) -> tuple[int, bytes]:
+    hdrs = {}
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, method=method, headers=hdrs)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return int(resp.status), resp.read()
+    except urllib.error.HTTPError as e:
+        return int(e.code), e.read()
+
+
 def _login(base_url: str, username: str, password: str) -> str:
     resp = _http_json("POST", f"{base_url}/api/auth/login", {"username": username, "password": password})
     return resp["access_token"]
 
 
-def _start_lap(base_url: str, token: str, track_name: str) -> str:
+def _start_lap(base_url: str, token: str, track_name: str, lap_type: str) -> str:
     headers = {"Authorization": f"Bearer {token}"}
-    resp = _http_json("POST", f"{base_url}/api/lap/start", {"track_name": track_name}, headers=headers)
+    resp = _http_json(
+        "POST",
+        f"{base_url}/api/lap/start",
+        {"track_name": track_name, "lap_type": lap_type},
+        headers=headers,
+    )
     return str(resp["lap_id"])
 
 
@@ -44,9 +64,11 @@ def _stop_lap(base_url: str, token: str) -> dict:
     headers = {"Authorization": f"Bearer {token}"}
     return _http_json("POST", f"{base_url}/api/lap/stop", None, headers=headers)
 
+
 def _get_status(base_url: str, token: str) -> dict:
     headers = {"Authorization": f"Bearer {token}"}
     return _http_json("GET", f"{base_url}/api/status", None, headers=headers)
+
 
 def _stop_lap_safe(base_url: str, token: str) -> None:
     try:
@@ -58,32 +80,6 @@ def _stop_lap_safe(base_url: str, token: str) -> None:
 def _send_point(base_url: str, token: str, point: dict) -> None:
     headers = {"Authorization": f"Bearer {token}"}
     _http_json("POST", f"{base_url}/api/gps/point", point, headers=headers)
-
-
-def _build_boundaries(base_url: str, token: str, track_id: str, inner_lap_id: str, outer_lap_id: str, n_points: int) -> dict:
-    headers = {"Authorization": f"Bearer {token}"}
-    return _http_json(
-        "POST",
-        f"{base_url}/api/track/{track_id}/boundaries/build",
-        {"outer_lap_id": outer_lap_id, "inner_lap_id": inner_lap_id, "n_points": int(n_points)},
-        headers=headers,
-    )
-
-def _optimize_from_track_boundaries(base_url: str, token: str, track_id: str, n_points: int) -> dict:
-    headers = {"Authorization": f"Bearer {token}"}
-    return _http_json(
-        "POST",
-        f"{base_url}/api/trajectory/optimize_from_track_boundaries",
-        {
-            "track_id": track_id,
-            "n_points": int(n_points),
-            "return_latlon": True,
-            "ipopt_linear_solver": "ma57",
-            "ipopt_print_level": 5
-        },
-        headers=headers,
-    )
-
 
 
 def _meters_to_latlon(dx_east_m: float, dy_north_m: float, lat0: float, lon0: float) -> tuple[float, float]:
@@ -111,8 +107,8 @@ def _generate_loop_points(
 ) -> list[dict]:
     random.seed(seed)
     pts: list[dict] = []
-
     speed_mps = max(0.0, float(speed_kmh)) / 3.6
+
     for i in range(n_points):
         a = 2.0 * math.pi * (i / max(1, n_points))
         x = radius_m * math.cos(a)
@@ -141,30 +137,77 @@ def _generate_loop_points(
     return pts
 
 
-def _send_lap(
+def _send_lap_fast(
     *,
     base_url: str,
     token: str,
     track_name: str,
+    lap_type: str,
     points: list[dict],
-    realtime: bool,
-    dt_s: float,
+    workers: int,
 ) -> str:
-    lap_id = _start_lap(base_url, token, track_name)
-    print(f"[OK] Started lap: {lap_id} track_name={track_name}")
+    lap_id = _start_lap(base_url, token, track_name, lap_type)
+    print(f"[OK] Started lap: {lap_id} track_name={track_name} lap_type={lap_type}")
 
-    for p in points:
-        _send_point(base_url, token, p)
-        if realtime:
-            time.sleep(dt_s)
+    if workers <= 1:
+        for p in points:
+            _send_point(base_url, token, p)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_send_point, base_url, token, p) for p in points]
+            done = 0
+            for f in as_completed(futs):
+                _ = f.result()
+                done += 1
+                if done % 100 == 0 or done == len(points):
+                    print(f"  sent {done}/{len(points)}")
 
     res = _stop_lap(base_url, token)
     print(f"[OK] Stopped lap: {lap_id} lap_time={res.get('lap_time')} points={res.get('points')}")
     return lap_id
 
 
+def wait_for_optimal(
+    *,
+    base_url: str,
+    token: str,
+    track_id: str,
+    timeout_s: float,
+    poll_s: float,
+) -> None:
+    headers = {"Authorization": f"Bearer {token}"}
+
+    url_csv = f"{base_url}/api/track/{track_id}/optimal_latlon.csv"
+    url_json = f"{base_url}/api/track/{track_id}/optimal.json"
+
+    t_end = time.time() + float(timeout_s)
+    print(f"[*] Waiting for optimal from server (timeout {timeout_s}s)...")
+
+    last_code = None
+    while time.time() < t_end:
+        code, data = _http_bytes("GET", url_csv, headers=headers)
+        if code == 200 and data:
+            out_csv = f"optimal_{track_id}_latlon.csv"
+            with open(out_csv, "wb") as f:
+                f.write(data)
+            print(f"[OK] optimal_latlon.csv ready -> saved: {out_csv}")
+
+            code2, data2 = _http_bytes("GET", url_json, headers=headers)
+            if code2 == 200 and data2:
+                out_json = f"optimal_{track_id}.json"
+                with open(out_json, "wb") as f:
+                    f.write(data2)
+                print(f"[OK] optimal.json ready -> saved: {out_json}")
+            return
+
+        last_code = code
+        time.sleep(float(poll_s))
+
+    print(f"[FAIL] optimal not ready. last HTTP code for CSV was: {last_code}")
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Sim client: send inner lap then outer lap to MGSA server.")
+    ap = argparse.ArgumentParser(description="Sim client: send INNER + OUTER and wait for server auto-optimal.")
     ap.add_argument("--base-url", default="http://127.0.0.1:8000")
     ap.add_argument("--track-id", required=True)
     ap.add_argument("--username", default="admin")
@@ -176,29 +219,28 @@ def main() -> int:
     ap.add_argument("--radius-inner-m", type=float, default=45.0)
     ap.add_argument("--track-width-m", type=float, default=10.0)
 
-    ap.add_argument("--n-points", type=int, default=900)
-    ap.add_argument("--hz", type=float, default=10.0)
+    ap.add_argument("--n-points", type=int, default=250, help="Use smaller for fast tests (e.g. 150-300).")
+    ap.add_argument("--hz", type=float, default=50.0, help="Only affects timestamps; no sleep in fast mode.")
 
     ap.add_argument("--speed-kmh", type=float, default=80.0)
-    ap.add_argument("--noise-m", type=float, default=0.5)
+    ap.add_argument("--noise-m", type=float, default=0.2)
     ap.add_argument("--fix-quality", type=int, default=4)
 
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--realtime", action="store_true", help="Sleep between points to mimic live streaming.")
-    ap.add_argument("--build-boundaries", action="store_true", help="Call /boundaries/build after both laps.")
 
-    ap.add_argument(
-        "--optimize",
-        action="store_true",
-        help="Call /api/trajectory/optimize_from_track_boundaries after boundaries exist."
-    )
+    ap.add_argument("--workers", type=int, default=8, help="Parallel point sends. 1 = sequential.")
+    ap.add_argument("--wait-timeout-s", type=float, default=120.0)
+    ap.add_argument("--wait-poll-s", type=float, default=1.0)
 
     args = ap.parse_args()
 
-    dt_s = 1.0 / max(0.1, float(args.hz))
     n = int(args.n_points)
     if n < 50:
         n = 50
+    if n > 5000:
+        n = 5000
+
+    dt_s = 1.0 / max(0.1, float(args.hz))
 
     inner_r = float(args.radius_inner_m)
     outer_r = float(args.radius_inner_m) + float(args.track_width_m)
@@ -206,6 +248,11 @@ def main() -> int:
     print(f"[*] Logging in to {args.base_url} as {args.username}...")
     token = _login(args.base_url, args.username, args.password)
     print("[OK] Logged in")
+
+    st = _get_status(args.base_url, token)
+    if st.get("recording"):
+        print("[WARN] Server already recording. Stopping active lap first...")
+        _stop_lap_safe(args.base_url, token)
 
     t0 = datetime.now(timezone.utc)
 
@@ -235,71 +282,38 @@ def main() -> int:
         dt_s=dt_s,
     )
 
-    st = _get_status(args.base_url, token)
-    if st.get("recording"):
-        print("[WARN] Server already recording. Stopping active lap first...")
-        _stop_lap_safe(args.base_url, token)
+    track_name = args.track_id  # IMPORTANT: server expects clean track_id
 
-
-    track_name_inner = f"{args.track_id}_inner"
-    track_name_outer = f"{args.track_id}_outer"
-
-    print("\n[*] Sending INNER lap...")
-    inner_lap_id = _send_lap(
+    print("\n[*] Sending INNER lap (fast)...")
+    inner_lap_id = _send_lap_fast(
         base_url=args.base_url,
         token=token,
-        track_name=track_name_inner,
+        track_name=track_name,
+        lap_type="inner",
         points=inner_pts,
-        realtime=bool(args.realtime),
-        dt_s=dt_s,
+        workers=int(args.workers),
     )
 
-    print("\n[*] Sending OUTER lap...")
-    outer_lap_id = _send_lap(
+    print("\n[*] Sending OUTER lap (fast)...")
+    outer_lap_id = _send_lap_fast(
         base_url=args.base_url,
         token=token,
-        track_name=track_name_outer,
+        track_name=track_name,
+        lap_type="outer",
         points=outer_pts,
-        realtime=bool(args.realtime),
-        dt_s=dt_s,
+        workers=int(args.workers),
     )
 
     print(f"\n[RESULT] inner_lap_id={inner_lap_id}")
     print(f"[RESULT] outer_lap_id={outer_lap_id}")
 
-    if args.build_boundaries:
-        print("\n[*] Building boundaries.csv on server...")
-        resp = _build_boundaries(args.base_url, token, args.track_id, inner_lap_id, outer_lap_id, n_points=n)
-        print(f"[OK] boundaries/build: {resp}")
-
-    if args.optimize:
-        print("\n[*] Optimizing ideal trajectory from boundaries.csv (solver)...")
-        resp = _optimize_from_track_boundaries(args.base_url, token, args.track_id, n_points=n)
-        print(f"[OK] optimize: converged={resp.get('converged')} lap_time_s={resp.get('lap_time_s')} N={resp.get('N')}")
-
-        # Save full json
-        out_json = f"ideal_{args.track_id}.json"
-        with open(out_json, "w", encoding="utf-8") as f:
-            json.dump(resp, f, ensure_ascii=False, indent=2)
-        print(f"[OK] Saved: {out_json}")
-
-        # Save optimal as CSV (lat/lon if present; else x/y)
-        if isinstance(resp.get("optimal_latlon"), list) and resp["optimal_latlon"]:
-            out_csv = f"ideal_{args.track_id}_optimal_latlon.csv"
-            with open(out_csv, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["i", "lat", "lon", "time_s", "speed_kmh"])
-                for i, p in enumerate(resp["optimal_latlon"]):
-                    w.writerow([i, p.get("lat"), p.get("lon"), p.get("time_s"), p.get("speed_kmh")])
-            print(f"[OK] Saved: {out_csv}")
-        else:
-            out_csv = f"ideal_{args.track_id}_optimal_xy.csv"
-            with open(out_csv, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["i", "x", "y", "time_s", "speed_kmh"])
-                for i, p in enumerate(resp.get("optimal", [])):
-                    w.writerow([i, p.get("x"), p.get("y"), p.get("time_s"), p.get("speed_kmh")])
-            print(f"[OK] Saved: {out_csv}")
+    wait_for_optimal(
+        base_url=args.base_url,
+        token=token,
+        track_id=args.track_id,
+        timeout_s=float(args.wait_timeout_s),
+        poll_s=float(args.wait_poll_s),
+    )
 
     return 0
 

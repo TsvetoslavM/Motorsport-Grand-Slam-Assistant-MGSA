@@ -1,6 +1,9 @@
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+from pathlib import Path
+
 from ..auth import verify_token
 from ..models import StartLapRequest
 from ..db import (
@@ -9,9 +12,12 @@ from ..db import (
 from ..runtime import now_iso, current_lap_id, set_current_lap_id
 from ..storage import ensure_csv_header, lap_csv_path, load_lap_points
 from ..ws import manager
-
+from ..auto_pipeline import register_completed_lap_and_maybe_run
 from ..tracks import track_path
 import json
+from ..routes.track_routes import build_racing_line_from_lap
+from ..models import BuildRacingLineFromLapRequest
+
 
 logger = logging.getLogger("mgsa-server")
 router = APIRouter(prefix="/api/lap", tags=["laps"])
@@ -62,11 +68,36 @@ async def stop_lap(token: dict = Depends(verify_token)):
     points = load_lap_points(lap_id)
     point_count = len(points)
 
+    n_points = min(2000, max(50, point_count))
+
     db_update_lap_stop(lap_id, end_time_dt.isoformat(), lap_time, point_count)
     await manager.broadcast({"type": "lap_completed", "lap_id": lap_id, "lap_time": lap_time, "points": point_count})
 
     logger.info(f"Completed lap {lap_id}: {lap_time:.2f}s points={point_count}")
+    track_name = lap.get("track_name")
+
+    lap_type = None
+    try:
+        meta_path = track_path(track_name) / f"{lap_id}.meta.json"
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            lap_type = meta.get("lap_type")
+    except Exception:
+        lap_type = None
+
     set_current_lap_id(None)
+
+    if track_name and lap_type in ("inner", "outer"):
+        n_points = min(900, max(50, int(point_count)))
+        asyncio.create_task(
+            register_completed_lap_and_maybe_run(
+                track_id=track_name,
+                lap_type=lap_type,
+                lap_id=lap_id,
+                n_points=n_points,
+            )
+        )
+
     return {"lap_id": lap_id, "lap_time": lap_time, "points": point_count, "status": "saved"}
 
 @router.get("/{lap_id}")

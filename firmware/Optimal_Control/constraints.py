@@ -8,24 +8,27 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
     Форсира траектория през шикана: outside → apex1 → apex2 → outside
     """
     chicane_cost = 0.0
-    
+
+    def _wrap(i):
+        return int(i) % int(N)
+
     for chicane in chicane_sequences:
         corner1_indices = chicane['corner1']
         corner2_indices = chicane['corner2']
         dir1 = chicane['direction1']
         dir2 = chicane['direction2']
-        
+
         if not corner1_indices or not corner2_indices:
             continue
-        
+
         # 1️⃣ Намери apex1
-        apex1_idx = max(corner1_indices, key=lambda i: abs(curvature[i])) + 1
-        
+        apex1_idx = _wrap(max(corner1_indices, key=lambda i: abs(curvature[i])) + 1)
+
         # 2️⃣ Намери apex2
-        apex2_idx = min(corner2_indices) + 1
+        apex2_idx = _wrap(min(corner2_indices) + 1)
         
         # 3️⃣ Entry point (по-рано преди първия завой)
-        entry_idx = (min(corner1_indices) - 3) % N  # 🔥 увеличено от 3 на 5
+        entry_idx = _wrap(min(corner1_indices) - 3) % N  # 🔥 увеличено от 3 на 5
         
         # 4️⃣ Exit zone (удължена зона след apex2)
         # Вместо една точка, направи постепенен изход
