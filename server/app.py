@@ -38,7 +38,7 @@ def create_app() -> FastAPI:
 
     for r in all_routers:
         app.include_router(r)
-
+        
     try:
         from .trajectory_api import router as trajectory_router
         app.include_router(trajectory_router)

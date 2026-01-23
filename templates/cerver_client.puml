@@ -1,0 +1,66 @@
+@startuml
+title MGSA – Expanded Software Architecture
+
+package "Vehicle Side\n(Raspberry Pi)" {
+
+  component "runtime/app.py\nMain Runtime Loop" as App
+  component "state_machine.py\nFSM" as FSM
+  component "gps_reader.py\nGPS Module" as GPS
+  component "imu_reader.py\nIMU Module" as IMU
+  component "button_daemon.py\nButtons" as BTN
+  component "hud_controller.py\nHUD / LED" as HUD
+  component "uploader.py\nData Uploader" as UP
+
+  GPS --> App : position, speed
+  IMU --> App : acceleration
+  BTN --> FSM : mode events
+  FSM --> App : active state
+
+  App --> UP : lap data\n(live / end)
+  App --> HUD : deviation info\n(color, direction)
+}
+
+package "MGSA Server\n(Laptop / PC)" {
+
+  component "FastAPI Core\nserver.py" as API
+  component "Auth Module" as AUTH
+  component "Lap Manager" as LAP
+  component "Track Manager" as TRACK
+  component "Storage Layer\nCSV / JSON" as STORE
+  component "Comparison Engine" as CMP
+  component "Web Visualization\nHTML / JS" as WEB
+
+  AUTH --> API
+  API --> LAP
+  API --> TRACK
+  LAP --> STORE
+  TRACK --> STORE
+
+  LAP --> CMP : driver lap
+  TRACK --> CMP : optimal line
+  CMP --> WEB : statistics
+}
+
+package "Trajectory Optimizer" {
+
+  component "Boundary Builder" as BND
+  component "Resampling Module" as RS
+  component "Constraint Model" as CON
+  component "Solver\n(CasADi / IPOPT)" as SOL
+  component "Optimal Export\nCSV / JSON" as EXP
+
+  BND --> RS
+  RS --> CON
+  CON --> SOL
+  SOL --> EXP
+}
+
+UP --> API : HTTP POST\nGPS / lap data
+API --> UP : status / results
+
+TRACK --> BND : inner + outer
+EXP --> TRACK : optimal line
+
+CMP --> API : comparison result
+API --> App : WebSocket\nlive deviation
+@enduml
