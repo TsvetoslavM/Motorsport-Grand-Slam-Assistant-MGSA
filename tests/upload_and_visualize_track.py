@@ -7,7 +7,8 @@ This script:
   3. Generates comparison HTML
 
 Usage:
-  python -m tests.upload_and_visualize_track --base-url http://127.0.0.1:8001 --track-id mytrack --boundaries-csv boundaries.csv --compute-optimal --simulate-line driver"""
+  python -m tests.upload_and_visualize_track --base-url http://127.0.0.1:8001 --track-id mytrack --boundaries-csv boundaries.csv --racing-line optimal raceline.csv
+"""
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import json
 import math
 import random
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -88,6 +90,16 @@ def _latlon_to_xy_m(lat: float, lon: float, *, lat0: float, lon0: float) -> tupl
     x = (lon - lon0) * m_per_deg_lon
     y = (lat - lat0) * m_per_deg_lat
     return x, y
+
+
+def _xy_m_to_latlon(x: float, y: float, *, lat0: float, lon0: float) -> tuple[float, float]:
+    m_per_deg_lat = 111_320.0
+    m_per_deg_lon = 111_320.0 * math.cos(math.radians(lat0))
+    if abs(m_per_deg_lon) < 1e-9:
+        m_per_deg_lon = 1.0
+    lat = lat0 + y / m_per_deg_lat
+    lon = lon0 + x / m_per_deg_lon
+    return lat, lon
 
 
 def _estimate_curvature(points_xy: list[tuple[float, float]]) -> list[float]:

@@ -1,0 +1,1 @@
+{"loaded": true, "track_id": "test_track_1", "path": "/home/cveto-msga/mgsa/diploma/data/tracks/test_track_1/ideal.csv", "points_count": 4, "columns": ["x_m", "y_m", "w_tr_right_m", "w_tr_left_m"], "ts": "2026-01-17T21:37:46", "file_mtime": 1768675249.3872662, "message": "ok (already loaded, unchanged file)"}

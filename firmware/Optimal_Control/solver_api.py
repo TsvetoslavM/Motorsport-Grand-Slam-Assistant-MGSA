@@ -12,12 +12,6 @@ from .constraints import (
     create_objective_with_racing_line,
     initialize_with_proper_racing_line,
 )
-from .CasADi_IPOPT import (
-    adaptive_path_discretization,
-    compute_curvature_closed,
-    get_advanced_ipopt_options,
-    smooth_curvature_closed,
-)
 
 
 PointLike = Union[Tuple[float, float], List[float], Dict[str, float]]
@@ -85,6 +79,26 @@ def _compute_normals_closed(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return normals
 
 
+def _curvature_closed(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    N = x.shape[0]
+    k = np.zeros(N, dtype=float)
+    for i in range(N):
+        i_prev = (i - 1) % N
+        i_next = (i + 1) % N
+        x0, y0 = x[i_prev], y[i_prev]
+        x1, y1 = x[i], y[i]
+        x2, y2 = x[i_next], y[i_next]
+        dx1, dy1 = x1 - x0, y1 - y0
+        dx2, dy2 = x2 - x1, y2 - y1
+        cross = dx1 * dy2 - dy1 * dx2
+        ds1 = np.hypot(dx1, dy1) + 1e-9
+        ds2 = np.hypot(dx2, dy2) + 1e-9
+        k[i] = 2.0 * cross / (ds1 * ds2 * (ds1 + ds2) + 1e-9)
+    return k
+
+
 def _ds_closed(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     dx = np.roll(x, -1) - x
     dy = np.roll(y, -1) - y
@@ -102,12 +116,6 @@ class OptimizeOptions:
     ipopt_acceptable_tol: float = 1e-3
     ipopt_linear_solver: str = "mumps"
     vehicle: Optional[VehicleParams] = None
-    # Adaptive discretization options
-    use_adaptive_discretization: bool = True
-    curvature_threshold: float = 0.01
-    ds_straight: float = 5.0
-    ds_corner: float = 1.5
-    curvature_smooth_sigma: float = 2.0
 
 
 def optimize_trajectory_from_two_lines(
@@ -133,10 +141,9 @@ def optimize_trajectory_from_two_lines(
     if left.shape[0] < 3 or right.shape[0] < 3:
         raise ValueError("left_line and right_line must each contain at least 3 points")
 
-    # Initial uniform resampling to get consistent centerline
-    N_initial = int(max(30, min(5000, options.n_points)))
-    left_r = _resample_polyline(left, N_initial)
-    right_r = _resample_polyline(right, N_initial)
+    N = int(max(30, min(5000, options.n_points)))
+    left_r = _resample_polyline(left, N)
+    right_r = _resample_polyline(right, N)
 
     center = 0.5 * (left_r + right_r)
     x_center = center[:, 0]
@@ -158,25 +165,8 @@ def optimize_trajectory_from_two_lines(
         w_left = np.maximum(0.5, np.sum(vec_left * normals, axis=1))
         w_right = np.maximum(0.5, -np.sum(vec_right * normals, axis=1))
 
-    # Apply adaptive discretization if enabled
-    if options.use_adaptive_discretization:
-        x_center, y_center, w_left, w_right, ds_array = adaptive_path_discretization(
-            x_center, y_center, w_left, w_right,
-            curvature_threshold=options.curvature_threshold,
-            ds_straight=options.ds_straight,
-            ds_corner=options.ds_corner,
-            smooth_sigma=options.curvature_smooth_sigma,
-        )
-        # Recompute normals after adaptive resampling
-        normals = _compute_normals_closed(x_center, y_center)
-    else:
-        ds_array = _ds_closed(x_center, y_center)
-
-    N = len(x_center)
-
-    # Compute and smooth curvature using shareable functions
-    curvature = compute_curvature_closed(x_center, y_center)
-    curvature = smooth_curvature_closed(curvature, sigma=options.curvature_smooth_sigma)
+    curvature = _curvature_closed(x_center, y_center)
+    ds_array = _ds_closed(x_center, y_center)
 
     # --- CasADi/IPOPT optimization (same structure as CasADi_IPOPT.py, but callable) ---
     import casadi as ca  # local import so server can start even if casadi missing
@@ -191,7 +181,11 @@ def optimize_trajectory_from_two_lines(
     opti.subject_to(slack_power >= 0)
     opti.subject_to(slack_power <= 50000)
 
-    a_lat, corner_types, corner_phases = add_constraints(
+    corner_types, corner_phases = initialize_with_proper_racing_line(
+        opti, n, v, a_lon, curvature, ds_array, w_left, w_right, vehicle, N
+    )
+
+    a_lat, corner_types2, corner_phases2 = add_constraints(
         opti=opti,
         vehicle=vehicle,
         n=n,
@@ -204,6 +198,8 @@ def optimize_trajectory_from_two_lines(
         curvature=curvature,
     )
 
+    # (use phases from constraints if available)
+    corner_phases_use = corner_phases2 if corner_phases2 is not None else corner_phases
     create_objective_with_racing_line(
         opti,
         v,
@@ -213,20 +209,21 @@ def optimize_trajectory_from_two_lines(
         curvature,
         w_left,
         w_right,
-        corner_phases,
+        corner_phases_use,
         ds_array,
         N,
         vehicle,
     )
 
-    # Use advanced IPOPT configuration with user overrides
-    opts = get_advanced_ipopt_options(
-        max_iter=int(options.ipopt_max_iter),
-        tol=float(options.ipopt_tol),
-        acceptable_tol=float(options.ipopt_acceptable_tol),
-        print_level=int(options.ipopt_print_level),
-        linear_solver=str(options.ipopt_linear_solver),
-    )
+    opts = {
+        "ipopt.max_iter": int(options.ipopt_max_iter),
+        "ipopt.tol": float(options.ipopt_tol),
+        "ipopt.acceptable_tol": float(options.ipopt_acceptable_tol),
+        "ipopt.print_level": int(options.ipopt_print_level),
+        "ipopt.linear_solver": str(options.ipopt_linear_solver),
+        "ipopt.mu_strategy": "adaptive",
+        "error_on_fail": False,
+    }
     opti.solver("ipopt", opts)
 
     try:
@@ -270,7 +267,7 @@ def optimize_trajectory_from_two_lines(
         ],
         "widths": {"w_left": w_left.tolist(), "w_right": w_right.tolist()},
         "debug": {
-            "corner_types": {k: (len(v) if isinstance(v, list) else v) for k, v in (corner_types).items()},
+            "corner_types": {k: (len(v) if isinstance(v, list) else v) for k, v in (corner_types2 or corner_types).items()},
         },
     }
 

@@ -1,0 +1,158 @@
+mgsa:
+  name: "MGSA"
+  timezone: "Europe/Sofia"
+
+paths:
+  project_root: "/home/cveto-msga/mgsa/diploma"
+  data_root: "/home/cveto-msga/mgsa/diploma/data"
+  sessions_dir: "/home/cveto-msga/mgsa/diploma/data/sessions"
+  track_cache_dir: "/home/cveto-msga/mgsa/diploma/data/track_cache"
+  state_dir: "/home/cveto-msga/mgsa/diploma/data/state"
+  command_file: "/tmp/mgsa_cmd.json"
+  current_start_finish_file: "/home/cveto-msga/mgsa/diploma/data/state/start_finish.json"
+  current_track_id_file: "/home/cveto-msga/mgsa/diploma/data/state/track_id.txt"
+  latest_optimal_file: "/home/cveto-msga/mgsa/diploma/data/track_cache/latest_optimal.json"
+  log_file: "/home/cveto-msga/mgsa/diploma/data/mgsa.log"
+  tracks_dir: "/home/cveto-msga/mgsa/diploma/data/tracks"
+
+buttons:
+  enabled: true
+  pull: "up"
+  debounce_ms: 50
+  long_press_s: 5.0
+  gpio:
+    outer: 17
+    inner: 27
+    race_start: 22
+
+start_finish:
+  enabled: true
+  require_rtk_fix: false
+  zone_radius_m: 3.0          # 2 m diameter
+  min_speed_kmh_to_arm: 5.0
+  min_time_between_crossings_s: 10.0
+  max_gps_age_s: 1.0
+
+session:
+  gps_hz: 10
+  imu_hz: 100
+  write_flush_s: 1.0
+  file_format: "csv"
+  record_gps: true
+  record_imu: true
+  record_rtk_status: true
+  record_heading: true
+
+lap_crossing:
+  enabled: true
+  stop_after_laps: 1
+  enter_zone_m: 3.0
+  min_speed_kmh: 5.0
+  min_lap_time_s: 20.0
+  min_time_between_crossings_s: 10.0
+
+gps:
+  source: "serial"
+  serial:
+    port: "/dev/ttyUSB0"
+    baud: 460800
+  output_frame: "wgs84"
+  rtk:
+    enabled: false
+    fix_only_for_start_finish: true
+    accept_float_for_recording: true
+    min_fix_ratio: 2.0
+
+imu:
+  enabled: true
+  source: "i2c"
+  i2c:
+    bus: 1
+    address: 0x68
+  orientation_filter: "none"
+
+hud:
+  enabled: true
+  sevenseg:
+    enabled: true
+    i2c_bus: 1
+    i2c_address: 0x70
+    brightness: 10
+    show_sign: true
+    format: "signed_fixed_2"   # +1.15 / -3.27
+
+led_strip:
+  enabled: true
+  driver: "neopixel_blinka"
+  count: 42
+  brightness: 0.25
+  gpio_pin: 12
+  pixel_order: "GRB"
+
+
+feedback:
+  start_finish_confirm:
+    pattern: "blink"
+    blinks: 3
+    on_ms: 120
+    off_ms: 120
+  start_finish_error:
+    pattern: "blink"
+    blinks: 6
+    on_ms: 80
+    off_ms: 80
+
+  trajectory_confirm:
+    blinks: 3
+    on_ms: 120
+    off_ms: 120
+  trajectory_error:
+    blinks: 6
+    on_ms: 80
+    off_ms: 80
+
+race_mode:
+  enabled: true
+  speed_compare:
+    enabled: true
+    tolerance_kmh: 10.0
+    update_hz: 20
+    map_match:
+      method: "nearest"
+      max_distance_m: 5.0
+  led_logic:
+    over_speed:
+      color: "red"
+      pattern: "blink"
+      on_ms: 120
+      off_ms: 120
+    under_speed:
+      color: "blue"
+      pattern: "blink"
+      on_ms: 120
+      off_ms: 120
+    ok:
+      color: "green"
+      pattern: "solid"
+
+net:
+  enabled: true
+  server:
+    base_url: "http://10.132.52.170:8000"
+    timeout_s: 10
+    retry:
+      attempts: 5
+      backoff_s: 1.5
+  upload:
+    auto_upload_when_ready: true
+    require_both_outer_and_inner: true
+    compress: true
+  download:
+    save_as_latest: true
+  auth:
+    username: "cveto-msga"
+    password: "raspberry"
+logging:
+  level: "INFO"
+  file: "/home/cveto-msga/mgsa/diploma/data/mgsa.log"
+  console: true

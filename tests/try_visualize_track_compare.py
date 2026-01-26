@@ -195,10 +195,6 @@ def main() -> int:
         '<span style="color:#10b981;">Green</span>=Start/Finish'
     ]
 
-    focus_coords = None
-    last_loaded_coords = None
-    driver_coords = None
-
     if args.kinds:
         for idx, kind in enumerate(args.kinds):
             try:
@@ -214,20 +210,6 @@ def main() -> int:
             color = palette[idx % len(palette)]
             folium.PolyLine(coords, color=color, weight=5, tooltip=f"Racing Line: {kind}").add_to(m)
             legend_parts.append(f' • <span style="color:{color};">{html_escape.escape(kind)}</span>')
-
-            last_loaded_coords = coords
-            if kind == "driver":
-                driver_coords = coords
-
-    if driver_coords is not None:
-        focus_coords = driver_coords
-    elif last_loaded_coords is not None:
-        focus_coords = last_loaded_coords
-    else:
-        focus_coords = outer + inner
-
-    if focus_coords:
-        m.fit_bounds(focus_coords, padding=(20, 20))
 
     map_html = m.get_root().render()
     page = _wrap_map_page(
@@ -259,3 +241,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         raise
+
