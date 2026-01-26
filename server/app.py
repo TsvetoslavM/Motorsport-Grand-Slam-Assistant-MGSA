@@ -1,8 +1,11 @@
 import logging
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pathlib import Path
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-
+from fastapi.staticfiles import StaticFiles
 
 from .config import SERVER_VERSION, DATA_DIR, DB_PATH
 from .db import db_init
@@ -10,23 +13,47 @@ from .runtime import current_lap_id
 from .ws import manager
 from .routes import all_routers
 
-from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-
-
 logger = logging.getLogger("mgsa-server")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ===== STARTUP =====
+    db_init()
+    logger.info("=" * 60)
+    logger.info("MGSA Server Started")
+    logger.info(f"Data dir: {DATA_DIR.absolute()}")
+    logger.info(f"DB: {DB_PATH.absolute()}")
+    logger.info(f"Active lap: {current_lap_id()}")
+    logger.info("=" * 60)
+
+    yield  # app is running
+
+    # ===== SHUTDOWN =====
+    logger.info("MGSA Server shutting down...")
+    conns = list(manager.connections)
+    for ws in conns:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MGSA Server",
         description="Motorsport GPS Analysis - Laptop Server",
         version=SERVER_VERSION,
+        lifespan=lifespan,
     )
 
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
+        app.mount(
+            "/static",
+            StaticFiles(directory=str(static_dir)),
+            name="static",
+        )
 
     app.add_middleware(
         CORSMiddleware,
@@ -38,7 +65,7 @@ def create_app() -> FastAPI:
 
     for r in all_routers:
         app.include_router(r)
-        
+
     try:
         from .trajectory_api import router as trajectory_router
         app.include_router(trajectory_router)
@@ -58,30 +85,11 @@ def create_app() -> FastAPI:
         finally:
             await manager.disconnect(websocket)
 
-    @app.on_event("startup")
-    async def on_startup():
-        db_init()
-        logger.info("=" * 60)
-        logger.info("MGSA Server Started")
-        logger.info(f"Data dir: {DATA_DIR.absolute()}")
-        logger.info(f"DB: {DB_PATH.absolute()}")
-        logger.info(f"Active lap: {current_lap_id()}")
-        logger.info("=" * 60)
-
-    @app.on_event("shutdown")
-    async def on_shutdown():
-        logger.info("MGSA Server shutting down...")
-        conns = list(manager.connections)
-        for ws in conns:
-            try:
-                await ws.close()
-            except Exception:
-                pass
-
     @app.get("/compare")
     async def compare_page():
         p = static_dir / "compare.html"
         if not p.exists():
             raise HTTPException(status_code=404, detail="compare.html not found")
         return FileResponse(str(p), media_type="text/html")
+
     return app

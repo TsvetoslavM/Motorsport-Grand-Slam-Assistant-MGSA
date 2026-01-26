@@ -3,22 +3,23 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 import asyncio
 from pathlib import Path
+import json
+import time
 
 from ..auth import verify_token
 from ..models import StartLapRequest
 from ..db import (
-    db_insert_lap, db_get_lap, db_update_lap_stop, db_list_laps
+    db_insert_lap, db_get_lap, db_update_lap_stop
 )
 from ..runtime import now_iso, current_lap_id, set_current_lap_id
 from ..storage import ensure_csv_header, lap_csv_path, load_lap_points
 from ..ws import manager
 from ..auto_pipeline import register_completed_lap_and_maybe_run
 from ..tracks import track_path
-import json
 from ..routes.track_routes import build_racing_line_from_lap
 from ..models import BuildRacingLineFromLapRequest
-from ..analysis_routes import compare_driver_vs_optimal_internal
-
+from ..analysis_routes import CompareRequest
+from ..analysis_routes import compare as compare_endpoint
 
 
 logger = logging.getLogger("mgsa-server")
@@ -121,10 +122,6 @@ async def get_lap_data(lap_id: str, token: dict = Depends(verify_token)):
     points = load_lap_points(lap_id)
     return {"info": lap, "points": points}
 
-from ..tracks import track_path
-from ..analysis_routes import compare as compare_endpoint
-import time
-
 async def _wait_for_file(path: Path, timeout_s: float = 30.0, poll_s: float = 0.2) -> bool:
     t0 = time.time()
     while time.time() - t0 < timeout_s:
@@ -148,9 +145,6 @@ async def _auto_compare_driver(track_id: str, token: dict, point_count: int) -> 
     if not ok_opt:
         await manager.broadcast({"type": "driver_vs_optimal_failed", "track_id": track_id, "error": "optimal not ready (optimal.json missing)"})
         return
-
-    from ..analysis_routes import CompareRequest
-    from ..analysis_routes import save_compare_json
 
     N = min(900, max(100, int(point_count)))
 
