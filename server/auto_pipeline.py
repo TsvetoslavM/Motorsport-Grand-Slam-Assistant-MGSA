@@ -265,9 +265,6 @@ def save_optimal_artifacts(track_id: str, result: dict) -> None:
                 a[i],
             ])
 
-
-
-
 async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, lap_id: str, n_points: int = 900) -> None:
     lk = _lock(track_id)
     async with lk:
@@ -275,7 +272,7 @@ async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, 
         if lap_type == "inner":
             st.inner_lap_id = lap_id
         elif lap_type == "outer":
-            st.outer_lap_id = lap_id
+            st.outer_lap_id = lap_i
         else:
             return
 

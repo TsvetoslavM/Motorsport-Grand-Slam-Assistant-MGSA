@@ -124,8 +124,39 @@ def _stats(arr: List[float]) -> Dict[str, Any]:
     p95 = s[int(0.95 * (n - 1))]
     return {"count": n, "mean": mean, "rmse": rmse, "p95": p95, "max": s[-1]}
 
+def resample_scalar_by_arclen(values: List[float], xy: List[Tuple[float, float]], n: int) -> List[float]:
+    if len(values) != len(xy) or len(values) < 2:
+        return [0.0] * n
+    d = _polyline_arclen(xy)
+    total = d[-1]
+    if total <= 1e-12:
+        return [float(values[0])] * n
+    out = []
+    step = total / (n - 1)
+    j = 1
+    for k in range(n):
+        target = k * step
+        while j < len(d) and d[j] < target:
+            j += 1
+        if j >= len(d):
+            out.append(float(values[-1]))
+            continue
+        i0 = j - 1
+        i1 = j
+        t0 = d[i0]
+        t1 = d[i1]
+        if t1 <= t0 + 1e-12:
+            out.append(float(values[i1]))
+            continue
+        a = (target - t0) / (t1 - t0)
+        v0 = float(values[i0])
+        v1 = float(values[i1])
+        out.append(v0 + a * (v1 - v0))
+    return out
 
-@router.post("/compare/{track_id}")
+def ll_to_xy_list(latlon: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    return [_latlon_to_xy_m(lat, lon, lat0, lon0) for (lat, lon) in latlon]
+
 async def compare(track_id: str, req: CompareRequest, token: dict = Depends(verify_token)):
     try:
         from firmware.Optimal_Control.solver_api import OptimizeOptions, optimize_trajectory_from_two_lines
@@ -137,9 +168,6 @@ async def compare(track_id: str, req: CompareRequest, token: dict = Depends(veri
 
     lat0 = (sum(p[0] for p in outer_latlon) + sum(p[0] for p in inner_latlon)) / (len(outer_latlon) + len(inner_latlon))
     lon0 = (sum(p[1] for p in outer_latlon) + sum(p[1] for p in inner_latlon)) / (len(outer_latlon) + len(inner_latlon))
-
-    def ll_to_xy_list(latlon: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-        return [_latlon_to_xy_m(lat, lon, lat0, lon0) for (lat, lon) in latlon]
 
     outer_xy = ll_to_xy_list(outer_latlon)
     inner_xy = ll_to_xy_list(inner_latlon)
@@ -166,36 +194,6 @@ async def compare(track_id: str, req: CompareRequest, token: dict = Depends(veri
 
     drv_xy = ll_to_xy_list(driver_latlon)
     drv_xy_r = _resample_polyline(drv_xy, N)
-
-    def resample_scalar_by_arclen(values: List[float], xy: List[Tuple[float, float]], n: int) -> List[float]:
-        if len(values) != len(xy) or len(values) < 2:
-            return [0.0] * n
-        d = _polyline_arclen(xy)
-        total = d[-1]
-        if total <= 1e-12:
-            return [float(values[0])] * n
-        out = []
-        step = total / (n - 1)
-        j = 1
-        for k in range(n):
-            target = k * step
-            while j < len(d) and d[j] < target:
-                j += 1
-            if j >= len(d):
-                out.append(float(values[-1]))
-                continue
-            i0 = j - 1
-            i1 = j
-            t0 = d[i0]
-            t1 = d[i1]
-            if t1 <= t0 + 1e-12:
-                out.append(float(values[i1]))
-                continue
-            a = (target - t0) / (t1 - t0)
-            v0 = float(values[i0])
-            v1 = float(values[i1])
-            out.append(v0 + a * (v1 - v0))
-        return out
 
     drv_v_kmh_r = resample_scalar_by_arclen(driver_v_kmh, drv_xy, N)
     drv_v_mps = [max(0.1, v / 3.6) for v in drv_v_kmh_r]

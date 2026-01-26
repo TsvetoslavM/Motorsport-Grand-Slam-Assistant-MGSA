@@ -3,9 +3,9 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from ..auth import verify_token
-from ..models import BuildBoundariesRequest, BoundariesUpload, RacingLineUpload
+from ..models import BuildBoundariesRequest, BoundariesUpload, RacingLineUpload, BuildRacingLineFromLapRequest
 from ..db import db_get_lap
-from ..storage import load_xy
+from ..storage import load_xy, load_lap_points
 from ..tracks import (
     track_path, boundaries_csv_path, resample_polyline,
     write_boundaries_csv, write_boundaries_meta,
@@ -13,7 +13,7 @@ from ..tracks import (
 )
 from ..runtime import now_iso
 from ..ws import manager
-from pathlib import Path
+from datetime import datetime
 
 
 router = APIRouter(prefix="/api/track", tags=["tracks"])
@@ -152,13 +152,13 @@ async def racing_line_meta(track_id: str, kind: str, token: dict = Depends(verif
         return {"exists": False}
     return json.loads(meta.read_text(encoding="utf-8"))
 
-
-from ..models import BuildRacingLineFromLapRequest
-from ..storage import load_lap_points
-from datetime import datetime
-
-
-
+def _parse_iso(ts: str) -> datetime | None:
+    try:
+        # handles "2026-01-21T10:55:06.529000+00:00"
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return None
+        
 @router.post("/{track_id}/racing_line/build_from_lap")
 async def build_racing_line_from_lap(track_id: str, req: BuildRacingLineFromLapRequest, token: dict = Depends(verify_token)):
     lap = db_get_lap(req.lap_id)
@@ -172,19 +172,12 @@ async def build_racing_line_from_lap(track_id: str, req: BuildRacingLineFromLapR
     kind = safe_kind(req.kind)
     out = track_path(track_id) / f"racing_{kind}.csv"
 
-    # build time_s from timestamp if possible, else fallback to index
-    def _parse_iso(ts: str) -> datetime | None:
-        try:
-            # handles "2026-01-21T10:55:06.529000+00:00"
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        except Exception:
-            return None
-
     t0 = None
     time_s_list = []
 
     for i, r in enumerate(pts):
         ts = r.get("timestamp")
+        # build time_s from timestamp if possible, else fallback to index
         dt = _parse_iso(ts) if isinstance(ts, str) else None
         if dt is None:
             time_s_list.append(float(i))
