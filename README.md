@@ -1,7 +1,6 @@
-```md
 # 🏁 Motorsport Grand Slam Assistant (MGSA)
 
-**MGSA** is a full-stack motorsport analytics platform that turns **raw GPS laps** into  
+**MGSA** is a full-stack motorsport analytics platform that turns **raw GPS laps** into
 **optimal racing lines, data-driven insights, and real-time driver feedback**.
 
 From the track → to algorithms → to visual guidance — all in one system.
@@ -10,13 +9,13 @@ From the track → to algorithms → to visual guidance — all in one system.
 
 ## ✨ What problem does MGSA solve?
 
-Most lap-analysis tools stop at *recording* data.  
+Most lap-analysis tools stop at *recording* data.
 MGSA goes further:
 
-- **Understands the track geometry**
-- **Computes the optimal trajectory**
-- **Compares the driver to the ideal line**
-- **Closes the loop with real-time feedback in the car**
+* **Understands the track geometry**
+* **Computes the optimal trajectory**
+* **Compares the driver to the ideal line**
+* **Closes the loop with real-time feedback in the car**
 
 ---
 
@@ -25,20 +24,23 @@ MGSA goes further:
 MGSA consists of three tightly-integrated layers:
 
 ### 🚗 On-car runtime
-- Physical buttons
-- GPS + IMU acquisition
-- LED / HUD driver feedback
-- Lap recording (inner / outer / racing)
+
+* Physical buttons
+* GPS + IMU acquisition
+* LED / HUD driver feedback
+* Lap recording (inner / outer / racing)
 
 ### 🧠 Analysis & Optimization
-- Curvature & segmentation tools
-- Heatmaps and speed profiles
-- CasADi + IPOPT optimal racing-line solver
+
+* Curvature & segmentation tools
+* Heatmaps and speed profiles
+* CasADi + IPOPT optimal racing-line solver
 
 ### 🌐 Server & Visualization
-- FastAPI backend
-- Track & lap storage
-- Interactive maps, comparisons and dashboards
+
+* FastAPI backend
+* Track & lap storage
+* Interactive maps, comparisons and dashboards
 
 Everything lives in this repository.
 
@@ -47,7 +49,6 @@ Everything lives in this repository.
 ## 📁 Repository structure
 
 ```
-
 .
 ├── server/                 # FastAPI backend + APIs
 │   ├── static/             # Web UIs (compare, maps, heatmaps)
@@ -72,10 +73,9 @@ Everything lives in this repository.
 ├── diagrams/               # PlantUML + exported PNGs
 ├── tests/                  # Analysis experiments & utilities
 └── mgsa_data/              # Auto-generated runtime data (gitignored)
+```
 
-````
-
-Each major folder contains its own README with deeper details.
+📌 Each major folder contains its own README with deeper details.
 
 ---
 
@@ -89,17 +89,17 @@ python -m venv .venv
 # source .venv/bin/activate  # Linux / macOS
 
 pip install -r requirements.txt
-````
+```
 
 ### Requirements (high-level)
 
-* Python 3.8+
+* Python **3.8+**
 * FastAPI + Uvicorn
 * numpy, scipy, pandas
 * matplotlib, folium, plotly
 * casadi
 * pyyaml
-* gpiozero (for embedded runtime)
+* gpiozero *(for embedded runtime)*
 
 ---
 
@@ -158,7 +158,7 @@ python -m firmware.curves \
   --mad --factor 3
 ```
 
-For the full optimal-control pipeline, see
+👉 For the full optimal-control pipeline, see
 `firmware/Optimal_Control/README.md`
 
 ---
@@ -175,7 +175,7 @@ python -m diploma.hud.led_strip_daemon &
 
 ### Runtime responsibilities
 
-* Reads GPS + IMU
+* Reads **GPS + IMU**
 * Detects laps & states (idle / record / race)
 * Sends data to the server
 * Receives optimal trajectories
@@ -192,14 +192,14 @@ diploma/config/mgsa.yaml
 
 ## ⚡ Quick start workflows
 
-### Just explore track geometry
+### 🔍 Just explore track geometry
 
 ```bash
 python -m firmware.curves --points data/simple_track.csv --mad
 python -m firmware.curves --points data/simple_track.csv --heatmap
 ```
 
-### Driver vs Optimal comparison
+### 🆚 Driver vs Optimal comparison
 
 1. Start the server
 2. Record or upload laps
@@ -212,13 +212,10 @@ python -m firmware.curves --points data/simple_track.csv --heatmap
 
 MGSA is designed to be:
 
-* Engineering-first
-* Research-friendly
-* Modular
-* Executable, not just theoretical
+* **Engineering-first**, not marketing-first
+* **Research-friendly**, not locked-down
+* **Modular**, not monolithic
+* **Executable**, not just theoretical
 
 This README is intentionally high-level.
 Each subsystem is documented where it lives.
-
-```
-```
