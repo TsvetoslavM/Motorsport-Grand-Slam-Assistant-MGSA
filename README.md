@@ -1,135 +1,161 @@
-# Motorsport Grand Slam Assistant (MGSA)
-Embedded device that records the car's behavior during laps on a race track and analyzes the most optimal trajectory. It shows the pilot a real-time visual indication (via a HUD display) of the ideal line of travel relative to the car's current position. The system has a web-based interface where you can monitor important parameters.
+## Motorsport Grand Slam Assistant (MGSA)
+
+MGSA is an end‑to‑end toolkit for **recording, analysing, and optimizing race laps**:
+
+- An **embedded runtime** on the car (buttons, GPS, IMU, LED HUD).
+- A **FastAPI server** on laptop/PC for storing laps, managing tracks and visualizing comparisons.
+- A **firmware toolkit** with curvature/segmentation tools and a full CasADi/IPOPT racing‑line optimizer.
+
+This repo contains everything needed to go from raw GPS laps to optimal racing lines and visual feedback for the driver.
 
 ---
 
-# Motorsport Curvature & Segmentation Toolkit
+## Repository structure
 
-This module provides **curvature calculation, segmentation, and visualization tools** for motorsport track analysis.
-It supports **MATLAB-style heatmaps, interactive Plotly visualizations, track segmentation with Median + MAD**, and **track outline rendering**.
+- `server/` – FastAPI backend (`server.server:app`), APIs for:
+  - recording laps, uploading boundaries, racing lines and comparisons,
+  - websocket live status and map/compare UIs.
+- `firmware/` – analysis/visualization toolkit:
+  - `curves.py`, `curvature.py`, `segmentation.py`, `smoothing.py` – curvature & segmentation.
+  - `visualization.py`, `track_coloring.py` – 2D/3D plots and HTML exports.
+  - `vmax_raceline/` – simple vmax vs curvature model.
+  - `Optimal_Control/` – CasADi/IPOPT optimal racing‑line solver (see its `README.md`).
+- `hardware/` – embedded runtime layout (based on `diploma/`):
+  - `diploma/runtime/app.py`, `state_machine.py`, `race_mode.py` – on‑car runtime + race feedback.
+  - `diploma/services/button_daemon.py` – GPIO button handler.
+  - `diploma/hud/led_strip_daemon.py` – LED HUD.
+  - `diploma/config/mgsa.yaml` – main on‑car config.
+- `templates/`, `server/static/` – HTML UIs for tracks, heatmaps, and driver vs optimal comparison.
+- `diagrams/` – PlantUML diagrams and exported PNGs for system and data‑flow architecture.
+- `tests/` – utilities and experiments for speed profiles, visualization, and server interaction.
+
+See also:
+
+- `server/README.md` – server details and routes.
+- `firmware/README.md` – firmware utilities and commands.
+- `firmware/Optimal_Control/README.md` – optimal‑control solver.
+- `hardware/README.md` – embedded/runtime overview.
 
 ---
 
 ## Installation
 
-Clone your repository and install dependencies:
+From the project root:
 
 ```bash
-git clone https://github.com/your-repo/firmware.git
-cd firmware
-```
+python -m venv .venv
+.\.venv\Scripts\activate      # Windows
+# source .venv/bin/activate  # Linux/macOS
 
-Create a virtual environment (recommended):
-
-```bash
-python -m venv venv
-source venv/bin/activate   # On Linux/macOS
-venv\Scripts\activate      # On Windows
-```
-
-Install required Python packages:
-
-```bash
 pip install -r requirements.txt
 ```
 
-If you don’t have a `requirements.txt`, install manually:
+Requirements (high‑level):
 
-```bash
-pip install numpy matplotlib plotly
-```
+- Python 3.8+
+- FastAPI + Uvicorn
+- numpy, scipy, pandas, matplotlib, folium, plotly
+- casadi
+- pyyaml, gpiozero (for hardware runtime)
 
 ---
 
-## Usage
+## Running the server
 
-Run the script directly with:
+From the project root:
 
 ```bash
-python -m firmware.curves [OPTIONS]
+.\.venv\Scripts\activate
+uvicorn server.server:app --host 0.0.0.0 --port 8000
 ```
 
-### Input Data
+Or:
 
-* `--points <path>` : CSV or JSON file with track points (`x,y` format).
-* Alternatively, set via environment variable:
+```bash
+python -m server.server
+```
+
+The server will create `./mgsa_data` and a SQLite DB, plus CSV laps and track artifacts.
+
+---
+
+## Firmware tools (offline analysis)
+
+Most offline analysis lives in `firmware/`. A common entrypoint is:
+
+```bash
+python -m firmware.curves --points data/simple_track.csv --mad
+```
+
+Examples:
+
+- Curvature/segmentation demo:
 
   ```bash
-  export TRACK_POINTS_FILE=data/simple_track.csv
+  python -m firmware.curves --points data/simple_track.csv --mad
   ```
 
+- 2D heatmap:
+
+  ```bash
+  python -m firmware.curves --points data/simple_track.csv --heatmap
+  ```
+
+- Interactive web heatmap:
+
+  ```bash
+  python -m firmware.curves --points data/simple_track.csv --web templates/heatmap.html
+  ```
+
+- Outline + racing line overlay:
+
+  ```bash
+  python -m firmware.curves \
+    --outline-csv data/simple_track.csv \
+    --outline-web templates/outline.html \
+    --raceline data/raceline.csv \
+    --mad --factor 3
+  ```
+
+For the full CasADi/IPOPT optimizer, see `firmware/Optimal_Control/README.md`.
+
 ---
 
-## Example Data Format - time_s,x_m,y_m,w_tr_right_m,w_tr_left_m,pitch_deg,roll_deg
+## Embedded / hardware runtime (high‑level)
 
-### Track Points (CSV)
-
-```csv
-x,y
-0,0
-1,2
-2,3
-3,5
-```
-
-### Track Outline (CSV with widths)
-
-```csv
-x,y,left,right
-0,0,3,3
-1,2,2.5,2.5
-2,3,2,2
-3,5,3,3
-```
-
----
-
-## Requirements
-
-* Python 3.8+
-* Libraries:
-
-  * `numpy`
-  * `matplotlib` (for heatmaps)
-  * `plotly` (for interactive HTML exports)
-
-Install all dependencies with:
+On the device you typically run:
 
 ```bash
-pip install numpy matplotlib plotly
+python -m diploma.runtime.app --config diploma/config/mgsa.yaml
+python -m diploma.services.button_daemon &
+python -m diploma.hud.led_strip_daemon &
 ```
 
+The runtime:
+
+- listens to GPS + IMU,
+- records outer/inner/race laps,
+- loads ideal trajectories from the server,
+- computes driver vs optimal feedback and drives LEDs / HUD.
+
+Configuration lives in `diploma/config/mgsa.yaml` (paths, GPIO, feedback timings, etc.).
+
 ---
 
-## Quick Start
+## Quick start flows
 
-1. Run segmentation on the included track:
+- **Just play with curvature & heatmaps**:
 
-   ```bash
-   python -m firmware.curves --points data/simple_track.csv --mad
-   ```
+  ```bash
+  python -m firmware.curves --points data/simple_track.csv --mad
+  python -m firmware.curves --points data/simple_track.csv --heatmap
+  ```
 
-2. View curvature heatmap:
+- **Run the backend and compare driver vs optimal**:
 
-   ```bash
-   python -m firmware.curves --points data/simple_track.csv --heatmap
-   ```
+  1. Start server: `uvicorn server.server:app --host 0.0.0.0 --port 8000`
+  2. Record or upload laps via the API.
+  3. Build boundaries and optimal line (`auto_pipeline.py` / UI).
+  4. Open the compare UI under `server/static/compare.html` / appropriate route.
 
-3. Export interactive web heatmap:
-
-   ```bash
-   python -m firmware.curves --points data/simple_track.csv --web out_heatmap.html
-   ```
-
-4. Try the default demo:
-
-   ```bash
-   python -m firmware.curves
-   ```
-
-4. Try full raceline with traight and turns:
-
-   ```bash
-   python -m firmware.curves --outline-csv data/simple_track.csv --outline-web templates/outline.html --raceline data/raceline.csv --mad --factor 3
-   ```
----
+This README is intentionally high‑level; per‑module READMEs contain more details.

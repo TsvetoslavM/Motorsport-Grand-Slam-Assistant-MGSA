@@ -1,3 +1,17 @@
+## Firmware module
+
+This directory contains the **analysis and visualization toolkit** used by MGSA:
+
+- `curves.py`, `curvature.py`, `segmentation.py`, `smoothing.py`: curvature, segmentation and multi‑scale smoothing utilities.
+- `visualization.py`, `track_coloring.py`: Matplotlib / Plotly style visualizations.
+- `vmax_raceline/`: simple speed‑profile model (vmax vs curvature).
+- `Optimal_Control/`: full CasADi/IPOPT racing‑line optimizer for advanced use (see its own `README.md`).
+- `vehicle.py`, `geometry.py`, `io.py`: vehicle model and I/O helpers.
+
+Most day‑to‑day experimentation can be done by running `python -m firmware.curves` with different options.
+
+---
+
 ## Commands
 
 ### 1. Segmentation (Median + MAD)
