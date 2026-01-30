@@ -1,0 +1,36 @@
+@startuml
+title Визуализация на сравнение: реална и оптимална траектория
+
+top to bottom direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+rectangle "compare.html\n(уеб визуализация)" as ui {
+  component "Зареждане на CSV траектории" as loadcsv
+  component "Зареждане на анализ (JSON)" as loadjson
+  component "Карта (Leaflet)\nполи-линии" as map
+  component "Графики / метрики\n(скорост, отклонение)" as charts
+  component "Легенда и цветове" as legend
+}
+
+database "Артефакти на трасето\n(tracks/<име_трасе>/)" as artifacts {
+  file "racing_driver.csv\n(реална обиколка)" as driver
+  file "optimal_latlon.csv\n(оптимална траектория)" as optimal
+  file "analysis.json\n(резултати от сравнение)" as analysis
+}
+
+driver --> loadcsv
+optimal --> loadcsv
+analysis --> loadjson
+
+loadcsv --> map : траектории → поли-линии
+loadjson --> charts : метрики/серии
+legend --> map : цветове + обяснения
+
+note right of legend
+Зелена линия – оптимална траектория
+Синя линия – реална (пилотска) обиколка
+(по избор) маркировки за отклонение
+end note
+
+@enduml

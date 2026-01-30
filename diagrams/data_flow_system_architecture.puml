@@ -1,0 +1,53 @@
+@startuml
+title Поток на данните и основните програмни модули в системата
+
+top to bottom direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+' ===== 1) СЕНЗОРИ =====
+rectangle "Сензори" as sensors {
+  component "GNSS приемник\n(позиция, скорост, време)" as gnss
+  component "IMU модул\n(ускорения, ъглови скорости)" as imu
+}
+
+' ===== 2) ВГРАДЕН УПРАВЛЯВАЩ СОФТУЕР =====
+rectangle "Вграден управляващ софтуер\n(runtime на Raspberry Pi)" as runtime {
+  component "Събиране + синхронизация" as sync
+  component "Изграждане на реална траектория" as realtraj
+  component "Режими и управление\n(машина на състоянията)" as fsm
+  component "HTTP клиент\n(качване/изтегляне)" as httpc
+  component "Индикация към водача\n(LED/HUD)" as hud
+}
+
+' ===== 3) СЪРВЪР =====
+rectangle "Сървърен софтуер" as server {
+  component "API прием на GPS точки\n+ управление на обиколки" as api
+  component "Съхранение на обиколки\nи трасета" as storage
+  component "Автоматичен пайплайн\n(boundaries + подготовка)" as pipeline
+  component "Оптимизатор\n(CasADi + IPOPT)" as solver
+  component "Анализ и сравнение\n(водач–оптимална)" as analysis
+}
+
+' ===== ВРЪЗКИ (вертикално) =====
+gnss -down-> sync : GNSS данни
+imu  -down-> sync : IMU данни
+
+sync -down-> realtraj
+realtraj -down-> httpc : лап/точки
+fsm -down-> httpc : команди/режим
+
+httpc -down-> api : HTTP заявки
+api -down-> storage
+storage -down-> pipeline
+pipeline -down-> solver
+solver -down-> storage : optimal_*
+
+storage -down-> analysis
+analysis -down-> storage : резултати (JSON/CSV)
+
+' ===== ВРЪЩАНЕ НА РЕЗУЛТАТИ КЪМ RUNTIME =====
+storage -up-> httpc : optimal_* / analysis_*
+httpc -down-> hud : отклонение/индикация
+
+@enduml
