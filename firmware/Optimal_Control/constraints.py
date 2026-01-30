@@ -5,7 +5,7 @@ from scipy.ndimage import gaussian_filter1d
 
 def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_sequences, ds_array, N):
     """
-    Форсира траектория през шикана: outside → apex1 → apex2 → outside
+    Forces trajectory through chicane: outside → apex1 → apex2 → outside
     """
     chicane_cost = 0.0
 
@@ -21,26 +21,26 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
         if not corner1_indices or not corner2_indices:
             continue
 
-        # 1️⃣ Намери apex1
+        # 1. Find apex1
         apex1_idx = _wrap(max(corner1_indices, key=lambda i: abs(curvature[i])) + 1)
 
-        # 2️⃣ Намери apex2
+        # 2. Find apex2
         apex2_idx = _wrap(min(corner2_indices) + 1)
         
-        # 3️⃣ Entry point (по-рано преди първия завой)
-        entry_idx = _wrap(min(corner1_indices) - 3) % N  # 🔥 увеличено от 3 на 5
+        # 3. Entry point (earlier before first corner)
+        entry_idx = _wrap(min(corner1_indices) - 3) % N
         
-        # 4️⃣ Exit zone (удължена зона след apex2)
-        # Вместо една точка, направи постепенен изход
+        # 4. Exit zone (extended zone after apex2)
+        # Instead of single point, create gradual exit
         corner2_end = max(corner2_indices)
         
-        # Намери колко дълъг трябва да бъде изходът (докато кривината падне)
+        # Find how long exit should be (until curvature drops)
         exit_end_idx = corner2_end
         for offset in range(1, 50):
             check_idx = (corner2_end + offset) % N
-            # Спри когато:
-            # 1) Кривината е много малка (почти права)
-            # 2) Или кривината сменя посока (нов завой)
+            # Stop when:
+            # 1) Curvature is very small (almost straight)
+            # 2) Or curvature changes direction (new corner)
             if abs(curvature[check_idx]) < 0.01:
                 exit_end_idx = check_idx
                 break
@@ -48,13 +48,13 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
                 exit_end_idx = (corner2_end + offset - 1) % N
                 break
         
-        # Създай пълна exit зона от apex2 до exit_end
+        # Create full exit zone from apex2 to exit_end
         if exit_end_idx > apex2_idx:
             full_exit_indices = list(range(apex2_idx + 1, exit_end_idx + 1))
         else:
             full_exit_indices = list(range(apex2_idx + 1, N)) + list(range(0, exit_end_idx + 1))
                 
-        # 5️⃣ ENTRY: outside
+        # 5. ENTRY: outside
         if dir1 == 'left':
             entry_target = -w_right[entry_idx] * 0.95
         else:
@@ -62,7 +62,7 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
         
         chicane_cost += (n[entry_idx] - entry_target) ** 2 * 5000.0
         
-        # 6️⃣ APEX1
+        # 6. APEX1
         if dir1 == 'left':
             apex1_target = w_left[apex1_idx]
         else:
@@ -70,7 +70,7 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
         
         chicane_cost += (n[apex1_idx] - apex1_target) ** 2 * 10000.0
         
-        # 7️⃣ TRANSITION
+        # 7. TRANSITION
         if apex2_idx > apex1_idx:
             transition_indices = list(range(apex1_idx, apex2_idx))
         else:
@@ -83,7 +83,7 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
                 target = (1.5 - t) * apex1_target + (1 - t) * apex2_target
                 chicane_cost += (n[trans_idx] - target) ** 2 * 3000.0
         
-        # 8️⃣ APEX2
+        # 8. APEX2
         if dir2 == 'left':
             apex2_target = w_left[apex2_idx] * 0.98
         else:
@@ -94,7 +94,7 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
         if full_exit_indices:
             num_exit = len(full_exit_indices)
             
-            # Определи финалната outside позиция
+            # Determine final outside position
             if dir2 == 'left':
                 final_outside = -w_right[exit_end_idx] * 0.99
             else:
@@ -102,17 +102,17 @@ def add_chicane_racing_line_cost(opti, n, curvature, w_left, w_right, chicane_se
             
             buffer_ratio = 0.6
             buffer_count = max(1, int(buffer_ratio * num_exit))
-            blend_power = 0.001   # степен на забавяне (можеш да пробваш и 4)
+            blend_power = 0.001   # slowdown degree (can try 4)
 
             for idx, exit_idx in enumerate(full_exit_indices):
                 t = idx / max(1, num_exit - 1)
 
                 if idx < buffer_count:
-                    # още по-бавно начало
+                    # even slower start
                     blend = (idx / buffer_count) ** blend_power * 0.08
                 else:
                     t_adj = (idx - buffer_count) / max(1, num_exit - buffer_count - 1)
-                    # плавен преход към финалната линия
+                    # smooth transition to final line
                     blend = 0.08 + t_adj ** blend_power
 
                 target = (1 - blend) * apex2_target + blend * final_outside
@@ -225,7 +225,7 @@ def classify_corner_types(curvature, ds_array, N):
             corner_types['sweeper'].extend(corner_indices)
         
     # Detect CHICANES - alternating direction corners close together
-    chicane_sequences = []  # НОВО: пази последователности от шикани
+    chicane_sequences = []  # NEW: stores chicane sequences
     chicane_window = 50  # meters
     
     for i in range(N):
@@ -242,17 +242,17 @@ def classify_corner_types(curvature, ds_array, N):
                 break
             
             if np.sign(curvature[idx]) == -np.sign(curvature[i]) and abs(curvature[idx]) > SWEEPER_CURV:
-                # Found chicane - пази като двойка завои
+                # Found chicane - store as corner pair
                 corner1_indices = []
                 corner2_indices = []
                 
-                # Намери пълния обхват на първия завой
+                # Find full range of first corner
                 for k in range(i-5, i+10):
                     k_idx = k % N
                     if abs(curvature[k_idx]) > SWEEPER_CURV and np.sign(curvature[k_idx]) == np.sign(curvature[i]):
                         corner1_indices.append(k_idx)
                 
-                # Намери пълния обхват на втория завой
+                # Find full range of second corner
                 for k in range(idx-5, idx+10):
                     k_idx = k % N
                     if abs(curvature[k_idx]) > SWEEPER_CURV and np.sign(curvature[k_idx]) == np.sign(curvature[idx]):
@@ -266,13 +266,13 @@ def classify_corner_types(curvature, ds_array, N):
                         'direction2': 'left' if curvature[idx] > 0 else 'right'
                     })
                     
-                    # Маркирай индексите като chicane
+                    # Mark indices as chicane
                     for k_idx in corner1_indices + corner2_indices:
                         if k_idx not in corner_types['chicane']:
                             corner_types['chicane'].append(k_idx)
                 break
     
-    corner_types['chicane_sequences'] = chicane_sequences  # НОВО
+    corner_types['chicane_sequences'] = chicane_sequences  # NEW
     # Detect COMPLEX - multiple corners in sequence
     complex_window = 100  # meters
     for i in range(N):
@@ -370,14 +370,14 @@ def find_corner_phases(curvature, ds_array, N):
 def add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N):
     tol = 0.03  # tolerance
 
-    # ✅ Use single apices, not raw 'apex' phase list
+    # Use single apices, not raw 'apex' phase list
     single_apices = extract_single_apex_indices(curvature, corner_phases)
 
-    # ✅ If no apices -> do nothing (avoid empty opti.variable / subject_to)
+    # If no apices -> do nothing (avoid empty opti.variable / subject_to)
     if not single_apices:
         return
 
-    # ✅ Slack size must match the loop below
+    # Slack size must match the loop below
     slack_apex = opti.variable(len(single_apices))
     opti.set_initial(slack_apex, 0.0)
     opti.subject_to(slack_apex >= 0)
@@ -399,7 +399,7 @@ def add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N):
 
 def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_phases, ds_array, N, corner_types=None):
     """
-    🔥 Добави corner_types като параметър
+    Add corner_types as parameter
     """
     racing_line_cost = 0.0
 
@@ -429,7 +429,7 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
         direction = "left" if avg_sign > 0 else "right"
         corner_info.append((s, e, direction))
 
-    # 1️⃣ Regular corner geometry penalty (keeps apex inside)
+    # 1. Regular corner geometry penalty (keeps apex inside)
     for (s, e, direction) in corner_info:
         seg_indices = list(range(s, e + 1))
         abs_curv = [abs(float(curvature[i])) for i in seg_indices]
@@ -450,7 +450,7 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
                 )
             racing_line_cost += (n[i] - target) ** 2 * 1000.0
 
-    # 2️⃣ Enhanced smooth gradual transition between corners with chicane logic
+    # 2. Enhanced smooth gradual transition between corners with chicane logic
     def is_corner_in_chicane(corner_start, corner_end, corner_types):
         """Check if a corner segment is part of any chicane sequence."""
         if corner_types is None or 'chicane_sequences' not in corner_types:
@@ -515,7 +515,7 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
             target = (1 - blend) * exit_side + blend * entry_side
             racing_line_cost += (n[i_mid] - target) ** 2 * STRAIGHT_WEIGHT
 
-    # 3️⃣ Path length penalty to keep centerline reasonable
+    # 3. Path length penalty to keep centerline reasonable
     path_length_cost = 0.0
     for i in range(N):
         if abs(curvature[i]) < KINK_CURV:
@@ -523,7 +523,7 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
 
     racing_line_cost += path_length_cost * 0.000001
 
-    # 🆕 4️⃣ Добави chicane cost (АКО corner_types е подаден)
+    # 4. Add chicane cost (IF corner_types is provided)
     if corner_types is not None and 'chicane_sequences' in corner_types:
         chicane_cost = add_chicane_racing_line_cost(
             opti, n, curvature, w_left, w_right, 
@@ -535,7 +535,7 @@ def add_racing_line_geometry_cost(opti, n, curvature, w_left, w_right, corner_ph
 
 
 def extract_single_apex_indices(curvature, corner_phases):
-    # Връща един apex index за всеки групиран апекс сегмент (максимална крива)
+    # Returns one apex index per grouped apex segment (maximum curvature)
     apex_list = sorted(set(corner_phases.get('apex', [])))
     if not apex_list:
         return []
@@ -585,7 +585,7 @@ def add_constraints(
 
     # 1) Track boundaries
     boundary_margin_default = 0.1
-    boundary_margin_apex = 0.0  # позволи достигане до кърба на апекса
+    boundary_margin_apex = 0.0  # allow reaching kerb at apex
     single_apices = extract_single_apex_indices(curvature, corner_phases)
 
     for i in range(N):
@@ -597,7 +597,7 @@ def add_constraints(
         opti.subject_to(n[i] <= w_right[i] - bm)
 
 
-    # 1b) 🔥🔥🔥 Add EXTREME apex constraints to force MAXIMUM inside trajectory
+    # 1b) Add EXTREME apex constraints to force MAXIMUM inside trajectory
     add_apex_constraints(opti, n, curvature, w_left, w_right, corner_phases, N)
 
     # 2) Velocity continuity (trapezoidal integration for dt)
@@ -653,7 +653,7 @@ def add_constraints(
         dn = n[i_next] - n[i]
 
         if i in single_apices or i_next in single_apices:
-            max_dn = 4.0   # позволи бърза промяна около апекса
+            max_dn = 4.0   # allow fast change around apex
         else:
             if abs(curvature[i]) > 0.02 or abs(curvature[i_next]) > 0.02:
                 max_dn = 2.0
@@ -698,7 +698,7 @@ def create_objective_with_racing_line(
     Create objective function that balances lap time with proper racing line.
     """
     
-    # 🆕 Класифицирай corner_types тук, за да ги подадеш
+    # Classify corner_types here to pass them
     corner_types = classify_corner_types(curvature, ds_array, N)
     
     # Primary objective: minimize lap time
@@ -712,9 +712,9 @@ def create_objective_with_racing_line(
     # Penalty for using power slack
     power_slack_penalty = ca.sum1(slack_power ** 2)
     
-    # 🔥🔥🔥 Racing line geometry cost with corner_types
+    # Racing line geometry cost with corner_types
     racing_line_cost = add_racing_line_geometry_cost(
-        opti, n, curvature, w_left, w_right, corner_phases, ds_array, N, corner_types  # 🆕 подай corner_types
+        opti, n, curvature, w_left, w_right, corner_phases, ds_array, N, corner_types
     )
     
     # Smoothness cost (penalize excessive lateral movement)
@@ -749,7 +749,7 @@ def initialize_with_proper_racing_line(
 ):
     """Initialize optimization variables with proper racing line: outside-apex-outside.
     
-    🔥🔥🔥 MAXIMUM AGGRESSION: Initialize with extreme apex positions.
+    MAXIMUM AGGRESSION: Initialize with extreme apex positions.
     """
     
     # Classify corners and phases
@@ -758,7 +758,7 @@ def initialize_with_proper_racing_line(
     
     # Initialize lateral position with racing line logic
     n_init = np.zeros(N)
-    # 🆕 Специална инициализация за шикани
+    # Special initialization for chicanes
     if 'chicane_sequences' in corner_types:
         for chicane in corner_types['chicane_sequences']:
             corner1 = chicane['corner1']
@@ -810,12 +810,12 @@ def initialize_with_proper_racing_line(
             else:
                 n_init[i] = -w_left[i] * 0.7  # Left side for right turn
         
-        # 🔥🔥🔥 APEX: EXTREME inside kerb position!
+        # APEX: EXTREME inside kerb position!
         elif i in corner_phases['apex']:
             if is_left_turn:
-                n_init[i] = -w_left[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95 (KISSING the kerb!)
+                n_init[i] = -w_left[i] * 0.95  # Was 0.90, now 0.95 (KISSING the kerb!)
             else:
-                n_init[i] = w_right[i] * 0.95  # 🔥🔥 Was 0.90, now 0.95 (KISSING the kerb!)
+                n_init[i] = w_right[i] * 0.95  # Was 0.90, now 0.95 (KISSING the kerb!)
         
         # EXIT: outside of corner
         elif i in corner_phases['exit']:
@@ -832,33 +832,33 @@ def initialize_with_proper_racing_line(
             else:
                 n_init[i] = -w_left[i] * 0.5
     
-    # Извлечи единични апекси
+    # Extract single apices
     single_apices = extract_single_apex_indices(curvature, corner_phases)
 
-    # Направи локален Gaussian pull към апекса (остър апекс)
+    # Create local Gaussian pull towards apex (sharp apex)
     n_init_before_smooth = n_init.copy()
     for apex_idx in single_apices:
         if abs(curvature[apex_idx]) < 0.01:
             continue
 
-        # целева позиция на апекса
+        # target position at apex
         if curvature[apex_idx] > 0:  # left turn
             apex_target = w_left[apex_idx] * 0.95
         else:
             apex_target = -w_right[apex_idx] * 0.95
 
-        # Параметри: small sigma => по-остър pull (тест: 2..4)
+        # Parameters: small sigma => sharper pull (test: 2..4)
         sigma_idx = 1.0
-        window = int(max(3, round(sigma_idx * 4)))  # обхват около апекса
+        window = int(max(3, round(sigma_idx * 4)))  # range around apex
 
         # Apply gaussian influence on indices around apex
         for offset in range(-window, window+1):
             i = (apex_idx + offset) % N
             influence = np.exp(-0.5 * (offset / sigma_idx)**2)
-            # Миксваме текущата стойност с целта, силно локално
+            # Mix current value with target, strongly local
             n_init_before_smooth[i] = (1.0 - influence) * n_init_before_smooth[i] + influence * apex_target
 
-    # По-слаб глобален smooth: sigma малък (или го махни)
+    # Weaker global smooth: small sigma (or remove it)
     n_init = gaussian_filter1d(n_init_before_smooth, sigma=2, mode='wrap')
 
     

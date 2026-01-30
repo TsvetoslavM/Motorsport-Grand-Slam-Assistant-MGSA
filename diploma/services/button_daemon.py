@@ -88,10 +88,10 @@ def main():
 
     race_tracker = PressTracker()
 
-    # === TOGGLE STATE (само за тестове) ===
-    # Пази последния "mode" който сме пратили към runtime.
-    # Ако натиснеш същия бутон втори път -> пращаме idle.
-    last_mode = {"mode": "idle"}  # mutable container за closures
+    # === TOGGLE STATE (for testing only) ===
+    # Stores last "mode" sent to runtime.
+    # If same button pressed second time -> send idle.
+    last_mode = {"mode": "idle"}  # mutable container for closures
 
     def set_mode_toggle(target_mode: str):
         start_runtime_if_needed(cfg)
@@ -125,7 +125,7 @@ def main():
         if dt >= long_press_s:
             write_command(cfg, {"ts": now_iso(), "type": "start_finish", "action": "set"})
         else:
-            # race няма toggle тук (ако искаш toggle и за race -> казваш)
+            # race has no toggle here (if you want toggle for race too -> say so)
             last_mode["mode"] = "race"
             write_command(cfg, {"ts": now_iso(), "type": "mode", "mode": "race"})
 

@@ -50,7 +50,7 @@ from server.auth import create_token, users, verify_token
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # за тестове; после стесни
+    allow_origins=["*"],  # for testing; restrict later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -197,10 +197,10 @@ class GPSPoint(BaseModel):
     longitude: float = Field(..., ge=-180, le=180)
     altitude: float = 0.0
     fix_quality: int = Field(0, ge=0, le=9)  # 0=invalid, 1=GPS, 2=DGPS, 4=RTK fix...
-    speed: float = Field(0.0, ge=0)  # m/s или km/h? -> приемаме m/s? (по-долу ще кажа)
+    speed: float = Field(0.0, ge=0)  # m/s or km/h? -> accepting m/s
     timestamp: str  # ISO 8601
 
-    # OPTIONAL extras (не чупят клиента, ако ги няма)
+    # OPTIONAL extras (won't break client if missing)
     hdop: Optional[float] = None
     sats: Optional[int] = None
     source: Optional[str] = None  # "gpsd" / "nmea" / etc.
@@ -268,9 +268,9 @@ manager = ConnectionManager()
 # =========================
 # RUNTIME STATE
 # =========================
-# текущата обиколка държим в runtime таблица, за да преживее рестарт
+# current lap is stored in runtime table to survive restart
 # runtime key: "current_lap_id"
-# buffer държим само за status; истинските точки са в CSV
+# buffer is only for status; actual points are in CSV
 gps_buffer_count: int = 0
 
 
@@ -344,13 +344,13 @@ def load_xy(lap_id: str):
     return out
 
 def resample_polyline(points, n: int):
-    # points: [(lat, lon), ...] -> връща n точки равномерно по дължина
+    # points: [(lat, lon), ...] -> returns n points uniformly spaced by length
     if n <= 1 or len(points) < 2:
         return points[:]
 
     import math
 
-    # кумулативна дължина
+    # cumulative length
     d = [0.0]
     for i in range(1, len(points)):
         lat1, lon1 = points[i - 1]
@@ -428,7 +428,7 @@ async def start_lap(req: StartLapRequest, token: dict = Depends(verify_token)):
     db_insert_lap(lap_id, req.track_name, start_time)
     set_current_lap_id(lap_id)
 
-    # създай CSV веднага
+    # create CSV immediately
     ensure_csv_header(lap_csv_path(lap_id))
 
     logger.info(f"Started lap: {lap_id} track={req.track_name}")
@@ -445,7 +445,7 @@ async def stop_lap(token: dict = Depends(verify_token)):
 
     lap = db_get_lap(lap_id)
     if not lap:
-        # ако DB е повреден, поне спираме runtime
+        # if DB is corrupted, at least stop runtime
         set_current_lap_id(None)
         raise HTTPException(status_code=500, detail="Lap state corrupted")
 
@@ -453,7 +453,7 @@ async def stop_lap(token: dict = Depends(verify_token)):
     start_time_dt = datetime.fromisoformat(lap["start_time"])
     lap_time = (end_time_dt - start_time_dt).total_seconds()
 
-    # броим точки по DB (point_count)
+    # count points from DB (point_count)
     lap2 = db_get_lap(lap_id)
     point_count = int(lap2["point_count"]) if lap2 else 0
 
@@ -516,7 +516,7 @@ async def delete_lap(lap_id: str, token: dict = Depends(verify_token)):
     conn.commit()
     conn.close()
 
-    # ако триеш текущата обиколка
+    # if deleting current lap
     if current_lap_id() == lap_id:
         set_current_lap_id(None)
 
@@ -579,7 +579,7 @@ class BuildBoundariesRequest(BaseModel):
     track_id: str
     outer_lap_id: str
     inner_lap_id: str
-    n_points: int = 800  # можеш 300..2000, според GPS честота/дължина
+    n_points: int = 800  # can be 300..2000, depending on GPS frequency/length
 
 
 @app.post("/api/track/{track_id}/boundaries/build")
@@ -657,8 +657,8 @@ class BoundariesUpload(BaseModel):
 @app.post("/api/track/{track_id}/boundaries/upload_json")
 async def upload_boundaries_json(track_id: str, req: BoundariesUpload, token: dict = Depends(verify_token)):
     """
-    Приема JSON списък със семпли и го записва в boundaries.csv
-    формат: time_s,outer_lat,outer_lon,inner_lat,inner_lon
+    Accepts JSON list of samples and writes to boundaries.csv
+    format: time_s,outer_lat,outer_lon,inner_lat,inner_lon
     """
     if not req.samples:
         raise HTTPException(status_code=400, detail="No samples provided")
@@ -697,7 +697,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # keep-alive: клиентът може да праща "ping"
+            # keep-alive: client can send "ping"
             msg = await websocket.receive_text()
             if msg == "ping":
                 await websocket.send_text("pong")
@@ -746,7 +746,7 @@ from fastapi import UploadFile, File
 
 @app.post("/api/track/{track_id}/ideal/upload")
 async def upload_ideal(track_id: str, file: UploadFile = File(...), token: dict = Depends(verify_token)):
-    # приемаме CSV
+    # accept CSV
     data = await file.read()
     out = track_path(track_id) / "ideal.csv"
     out.write_bytes(data)
@@ -782,16 +782,16 @@ class RacingPoint(BaseModel):
 
 
 class RacingLineUpload(BaseModel):
-    kind: str = Field("optimal", description="Тип линия: 'optimal', 'driver', и т.н.")
+    kind: str = Field("optimal", description="Line type: 'optimal', 'driver', etc.")
     points: List[RacingPoint]
 
 
 @app.post("/api/track/{track_id}/racing_line/upload")
 async def upload_racing_line(track_id: str, req: RacingLineUpload, token: dict = Depends(verify_token)):
     """
-    Приема състезателна линия като JSON:
+    Accepts racing line as JSON:
     time_s, lat, lon, speed_kmh
-    и я записва в CSV файл racing_{kind}.csv в track директорията.
+    and writes to CSV file racing_{kind}.csv in track directory.
     """
     if not req.points:
         raise HTTPException(status_code=400, detail="No points provided")
@@ -864,6 +864,6 @@ if __name__ == "__main__":
         "server.server:app",
         host="0.0.0.0",
         port=8000,
-        reload=False,  # за кола по-добре False
+        reload=False,  # better False for car
         log_level="info",
     )

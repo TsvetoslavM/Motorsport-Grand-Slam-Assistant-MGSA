@@ -10,7 +10,7 @@ It supports **MATLAB-style heatmaps, interactive Plotly visualizations, track se
 
 ---
 
-## 📦 Installation
+## Installation
 
 Clone your repository and install dependencies:
 
@@ -41,7 +41,7 @@ pip install numpy matplotlib plotly
 
 ---
 
-## ⚡ Usage
+## Usage
 
 Run the script directly with:
 
@@ -49,7 +49,7 @@ Run the script directly with:
 python -m firmware.curves [OPTIONS]
 ```
 
-### 🔹 Input Data
+### Input Data
 
 * `--points <path>` : CSV or JSON file with track points (`x,y` format).
 * Alternatively, set via environment variable:
@@ -60,7 +60,7 @@ python -m firmware.curves [OPTIONS]
 
 ---
 
-## 📂 Example Data Format - time_s,x_m,y_m,w_tr_right_m,w_tr_left_m,pitch_deg,roll_deg
+## Example Data Format - time_s,x_m,y_m,w_tr_right_m,w_tr_left_m,pitch_deg,roll_deg
 
 ### Track Points (CSV)
 
@@ -84,7 +84,7 @@ x,y,left,right
 
 ---
 
-## ✅ Requirements
+## Requirements
 
 * Python 3.8+
 * Libraries:
@@ -101,7 +101,7 @@ pip install numpy matplotlib plotly
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 1. Run segmentation on the included track:
 

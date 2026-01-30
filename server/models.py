@@ -58,7 +58,7 @@ class RacingPoint(BaseModel):
     speed_kmh: float
 
 class RacingLineUpload(BaseModel):
-    kind: str = Field("optimal", description="Тип линия: 'optimal', 'driver', и т.н.")
+    kind: str = Field("optimal", description="Line type: 'optimal', 'driver', etc.")
     points: List[RacingPoint]
 
 class BuildRacingLineFromLapRequest(BaseModel):

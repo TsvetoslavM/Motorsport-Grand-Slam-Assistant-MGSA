@@ -304,7 +304,7 @@ def _attach_hover(fig, line_collection, v_opt, a_lon_opt, a_lat_opt, vehicle):
 def plot_f1_results(
     x_center, y_center, w_left, w_right, normals, n_opt, v_opt, a_lon_opt, a_lat_opt, ds_array, vehicle, lap_time_seconds, track_length, N
 ):
-    """Създава пълна визуализация на F1 оптимизацията (track, скорости, G, мощност, сектори)."""
+    """Creates full visualization of F1 optimization (track, speeds, G, power, sectors)."""
     plt.style.use("dark_background")
     fig = plt.figure(figsize=(16, 12))
     gs = fig.add_gridspec(3, 4, hspace=0.35, wspace=0.30)
@@ -342,7 +342,7 @@ def plot_f1_results(
 
 
 def print_summary(v_opt, a_lon_opt, a_lat_opt, vehicle, lap_time_seconds, track_length):
-    """Принтира резюме на оптимизацията."""
+    """Prints optimization summary."""
     a_total = np.sqrt(a_lon_opt**2 + a_lat_opt**2)
     downforce_g = vehicle.k_aero() * v_opt**2 / vehicle.gravity
     

@@ -121,7 +121,7 @@ def _wrap_map_page(*, title: str, subtitle: str, legend_html: str, map_html: str
   <div class="checkered-bg"></div>
   <div class="header">
     <div class="container" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-      <div class="title">🏁 {html_escape.escape(title)}</div>
+      <div class="title">{html_escape.escape(title)}</div>
       <div class="kicker">{html_escape.escape(subtitle)}</div>
     </div>
   </div>

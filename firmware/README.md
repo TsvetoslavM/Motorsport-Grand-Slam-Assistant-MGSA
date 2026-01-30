@@ -1,4 +1,4 @@
-## 🎯 Commands
+## Commands
 
 ### 1. Segmentation (Median + MAD)
 

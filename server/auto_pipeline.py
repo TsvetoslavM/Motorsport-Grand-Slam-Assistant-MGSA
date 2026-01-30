@@ -278,7 +278,7 @@ def save_optimal_artifacts(track_id: str, result: dict) -> None:
                 speed_kmh[i] if speed_kmh[i] is not None else "",
                 a[i],
             ])
-from server.ws import manager  # ако вече не е импортнато
+from server.ws import manager
 import logging
 log = logging.getLogger("mgsa-server")
 

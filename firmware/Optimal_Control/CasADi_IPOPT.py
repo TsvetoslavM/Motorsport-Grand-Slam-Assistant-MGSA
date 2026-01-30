@@ -17,7 +17,7 @@ except Exception:
     print("Warning: visualization module not found, skipping plots")
 
 # ═══════════════════════════════════════════════════════════════
-# 🔧 SHAREABLE FUNCTIONS FOR OPTIMIZATION
+# SHAREABLE FUNCTIONS FOR OPTIMIZATION
 # ═══════════════════════════════════════════════════════════════
 
 def compute_curvature_closed(x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -198,14 +198,14 @@ def get_advanced_ipopt_options(
 
 
 # ═══════════════════════════════════════════════════════════════
-# 📜 MAIN SCRIPT (only runs when executed directly)
+# MAIN SCRIPT (only runs when executed directly)
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     vehicle = VehicleParams()
 
     # ═══════════════════════════════════════════════════════════════
-    # 📊 LOAD TRACK DATA
+    # LOAD TRACK DATA
     # ═══════════════════════════════════════════════════════════════
     try:
         track = pd.read_csv("Track.csv", comment="#", names=["x_m","y_m","w_tr_right_m","w_tr_left_m"])
@@ -227,10 +227,10 @@ if __name__ == "__main__":
     N_raw = len(x_center)
 
     # ═══════════════════════════════════════════════════════════════
-    # 🔹 A. ADAPTIVE STEP SIZE (Δs)
+    # A. ADAPTIVE STEP SIZE (Δs)
     # ═══════════════════════════════════════════════════════════════
     print("\n" + "="*60)
-    print("🔹 ADAPTIVE DISCRETIZATION")
+    print("ADAPTIVE DISCRETIZATION")
     print("="*60)
 
     # Use shareable adaptive discretization function
@@ -253,7 +253,7 @@ if __name__ == "__main__":
     print(f"Δs: avg={ds_avg:.2f}m, min={ds_min:.2f}m, max={ds_max:.2f}m")
 
     # ═══════════════════════════════════════════════════════════════
-    # 📐 GEOMETRY CALCULATIONS
+    # GEOMETRY CALCULATIONS
     # ═══════════════════════════════════════════════════════════════
     normals = np.zeros((N, 2))
     curvature = np.zeros(N)
@@ -272,10 +272,10 @@ if __name__ == "__main__":
     curvature = smooth_curvature_closed(curvature, sigma=2.0)
 
     # ═══════════════════════════════════════════════════════════════
-    # 🎯 OPTIMIZATION SETUP
+    # OPTIMIZATION SETUP
     # ═══════════════════════════════════════════════════════════════
     print("\n" + "="*60)
-    print("🎯 OPTIMIZATION SETUP WITH RACING LINE")
+    print("OPTIMIZATION SETUP WITH RACING LINE")
     print("="*60)
 
     opti = ca.Opti()
@@ -290,7 +290,7 @@ if __name__ == "__main__":
         opti.subject_to(slack_power[i] <= 50000)
 
     # ═══════════════════════════════════════════════════════════════
-    # 🎬 INITIALIZATION WITH RACING LINE
+    # INITIALIZATION WITH RACING LINE
     # ═══════════════════════════════════════════════════════════════
     print("\nInitializing with proper racing line geometry...")
     corner_types, corner_phases = initialize_with_proper_racing_line(
@@ -303,7 +303,7 @@ if __name__ == "__main__":
             print(f"  {corner_type}: {len(indices)} segments")
 
     # ═══════════════════════════════════════════════════════════════
-    # 🚧 CONSTRAINTS WITH RACING LINE AWARENESS
+    # CONSTRAINTS WITH RACING LINE AWARENESS
     # ═══════════════════════════════════════════════════════════════
     print("\nAdding constraints with racing line awareness...")
     vehicle.mu_friction = 2.0
@@ -325,7 +325,7 @@ if __name__ == "__main__":
     )
 
     # ═══════════════════════════════════════════════════════════════
-    # 🔹 OBJECTIVE FUNCTION WITH RACING LINE
+    # OBJECTIVE FUNCTION WITH RACING LINE
     # ═══════════════════════════════════════════════════════════════
     print("\nCreating objective function with racing line cost...")
     total_cost = create_objective_with_racing_line(
@@ -334,7 +334,7 @@ if __name__ == "__main__":
     )
 
     # ═══════════════════════════════════════════════════════════════
-    # ⚙️ SOLVER CONFIGURATION
+    # SOLVER CONFIGURATION
     # ═══════════════════════════════════════════════════════════════
     opts = get_advanced_ipopt_options(
         max_iter=3000,
@@ -347,22 +347,22 @@ if __name__ == "__main__":
     opti.solver('ipopt', opts)
 
     # ═══════════════════════════════════════════════════════════════
-    # 🚀 SOLVE
+    # SOLVE
     # ═══════════════════════════════════════════════════════════════
     print("\n" + "="*60)
-    print("🚀 Starting F1 lap time optimization...")
+    print("Starting F1 lap time optimization...")
     print("="*60)
 
     try:
         sol = opti.solve()
-        print("\n✅ Optimization converged successfully!")
+        print("\nOptimization converged successfully!")
     except Exception as e:
-        print(f"\n⚠️ Solver didn't fully converge: {e}")
+        print(f"\nSolver didn't fully converge: {e}")
         print("Using best solution found...")
         sol = opti.debug
 
     # ═══════════════════════════════════════════════════════════════
-    # 📊 EXTRACT RESULTS
+    # EXTRACT RESULTS
     # ═══════════════════════════════════════════════════════════════
     n_opt = sol.value(n)
     v_opt = sol.value(v)
@@ -381,7 +381,7 @@ if __name__ == "__main__":
     track_length = np.sum(ds_array)
 
     # ═══════════════════════════════════════════════════════════════
-    # 💾 SAVE OPTIMAL TRAJECTORY TO CSV
+    # SAVE OPTIMAL TRAJECTORY TO CSV
     # ═══════════════════════════════════════════════════════════════
     x_opt = x_center + n_opt * normals[:, 0]
     y_opt = y_center + n_opt * normals[:, 1]
@@ -398,13 +398,13 @@ if __name__ == "__main__":
     })
 
     opt_df.to_csv("optiline.csv", index=False)
-    print("\n✅ Optimal trajectory saved as 'optiline.csv'!")
+    print("\nOptimal trajectory saved as 'optiline.csv'!")
 
     # ═══════════════════════════════════════════════════════════════
-    # 📋 PRINT SUMMARY
+    # PRINT SUMMARY
     # ═══════════════════════════════════════════════════════════════
     print("\n" + "="*60)
-    print("📋 OPTIMIZATION RESULTS")
+    print("OPTIMIZATION RESULTS")
     print("="*60)
     print(f"Lap time: {lap_time_seconds:.3f} seconds")
     print(f"Track length: {track_length:.1f} meters")
@@ -428,7 +428,7 @@ if __name__ == "__main__":
         pass
 
     # ═══════════════════════════════════════════════════════════════
-    # 📈 VISUALIZATION
+    # VISUALIZATION
     # ═══════════════════════════════════════════════════════════════
     try:
         fig = plot_f1_results(
@@ -453,5 +453,5 @@ if __name__ == "__main__":
         print("Continuing without plots...")
 
     print("\n" + "="*60)
-    print("🏁 OPTIMIZATION COMPLETE!")
+    print("OPTIMIZATION COMPLETE!")
     print("="*60)

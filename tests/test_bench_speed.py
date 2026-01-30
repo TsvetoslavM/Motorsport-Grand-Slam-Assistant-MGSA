@@ -30,16 +30,16 @@ def f1_params():
     )
     
 def test_speed_profile_benchmark(f1_params):
-    # Синтетична траектория: синусоида от 0..1000 м
-    x = np.linspace(0, 1000, 2001)   # 2000 точки
-    y = 10.0 * np.sin(0.01 * x)      # малки завои
+    # Synthetic trajectory: sinusoid from 0..1000 m
+    x = np.linspace(0, 1000, 2001)   # 2000 points
+    y = 10.0 * np.sin(0.01 * x)      # small corners
     points = list(zip(x, y))
 
     start = time.perf_counter()
     s, kappa, v_lat, v = speed_profile(points, f1_params)
     elapsed = time.perf_counter() - start
 
-    # Проверки
+    # Checks
     assert s[-1] > 900.0
     assert np.all(v >= 0.0)
     assert elapsed < 0.1, f"Speed profile too slow: {elapsed:.3f}s"

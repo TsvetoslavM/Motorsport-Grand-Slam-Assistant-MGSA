@@ -22,7 +22,7 @@ def segment_track_multi_scale(points, window_sizes=[3,5,7], threshold_factors=[0
         curvs = multi_curvs[w]
         combined[:len(curvs)] |= (curvs >= thresholds[w])
 
-    states = np.where(combined, "завой", "права")
+    states = np.where(combined, "turn", "straight")
 
     # Build segments
     segments = []
@@ -39,7 +39,7 @@ def segment_track_multi_scale(points, window_sizes=[3,5,7], threshold_factors=[0
         seg_points = points[point_start:point_end]
 
         if len(seg_points)>=min_segment_length:
-            if current_state=="завой":
+            if current_state=="turn":
                 mid_window = window_sizes[len(window_sizes)//2]
                 curvs_mid = multi_curvs[mid_window][point_start:point_end]
                 if len(curvs_mid) == 0:

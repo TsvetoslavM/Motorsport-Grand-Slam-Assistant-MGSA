@@ -55,7 +55,7 @@ def visualize_curvature_concept():
     for i, seg in enumerate(segments):
         seg_type, seg_points, entry, apex, exit, apex_kappa = seg
         print(f"\nSegment {i+1} - {seg_type}: {len(seg_points)} points")
-        if seg_type == "завой":
+        if seg_type == "turn":
             print(f"  Entry: {entry}, Apex: {apex} (κ={apex_kappa:.4f}), Exit: {exit}")
         else:
             print(f"  From {seg_points[0]} to {seg_points[-1]}")
@@ -83,7 +83,7 @@ def test_segmentation_debug(points_file: str | None = None):
         seg_type, seg_points, entry, apex, exit, apex_kappa = seg
         print(f"\nSegment {i+1} - {seg_type}:")
         print(f"  Points: {seg_points}")
-        if seg_type == "завой":
+        if seg_type == "turn":
             print(f"  Entry: {entry}, Apex: {apex} (κ={apex_kappa:.4f}), Exit: {exit}")
 
     print("\n" + "=" * 70)
@@ -118,7 +118,7 @@ def test_segmentation_debug(points_file: str | None = None):
         for i, seg in enumerate(segments):
             seg_type, seg_points, entry, apex, exit, apex_kappa = seg
             print(f"  Segment {i+1} - {seg_type}: {len(seg_points)} points")
-            if seg_type == "завой":
+            if seg_type == "turn":
                 print(f"    Entry: {entry}, Apex: {apex} (κ={apex_kappa:.4f}), Exit: {exit}")
             else:
                 print(f"    From {seg_points[0]} to {seg_points[-1]}")

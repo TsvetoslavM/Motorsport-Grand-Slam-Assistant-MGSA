@@ -248,7 +248,7 @@ class MgsaIO:
         try:
             mtime = ideal_path.stat().st_mtime
 
-            # Ако не е force и вече имаме status за същия mtime -> skip (по желание)
+            # If not force and already have status for same mtime -> skip (optional)
             if not force:
                 prev = self._trajectory_status_read_safe()
                 if prev and prev.get("loaded") and prev.get("track_id") == track_id and float(prev.get("file_mtime", 0.0)) == float(mtime):
@@ -383,9 +383,9 @@ class MgsaIO:
     def record_tick(self, lap_type: str):
         if not self._record_f:
             return
-        pos = self.gps_get_latlon()
+            pos = self.gps_get_latlon()
         if not pos:
-            # няма позиция още -> не пишем точка, просто излизаме
+            # no position yet -> don't write point, just exit
             return
         lat, lon = pos
 
