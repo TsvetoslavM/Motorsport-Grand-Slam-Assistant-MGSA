@@ -10,6 +10,9 @@ from typing import Dict, List, Optional, Tuple
 
 from server.storage import load_xy
 from server.tracks import boundaries_csv_path, resample_polyline, track_path
+from server.analysis_routes import compare_driver_vs_optimal_internal
+
+
 
 try:
     from firmware.Optimal_Control.solver_api import OptimizeOptions, optimize_trajectory_from_two_lines
@@ -96,7 +99,8 @@ def build_boundaries_csv(track_id: str, outer_lap_id: str, inner_lap_id: str, n_
     return out_path
 
 
-def optimize_from_boundaries(track_id: str, n_points: int, ipopt_linear_solver: str = "ma57", ipopt_print_level: int = 0) -> dict:
+def optimize_from_boundaries(track_id: str, n_points: int, ipopt_linear_solver: str = "mumps", ipopt_print_level: int = 0) -> dict:
+    
     if optimize_trajectory_from_two_lines is None or OptimizeOptions is None:
         raise RuntimeError(f"Firmware optimizer unavailable: {_IMPORT_ERR}")
 
@@ -122,8 +126,15 @@ def optimize_from_boundaries(track_id: str, n_points: int, ipopt_linear_solver: 
 
     lat0, lon0 = _choose_origin_mean(outer_ll, inner_ll)
 
-    left_xy = [{"x": _latlon_to_xy_m(lat, lon, lat0, lon0)[0], "y": _latlon_to_xy_m(lat, lon, lat0, lon0)[1]} for (lat, lon) in outer_ll]
-    right_xy = [{"x": _latlon_to_xy_m(lat, lon, lat0, lon0)[0], "y": _latlon_to_xy_m(lat, lon, lat0, lon0)[1]} for (lat, lon) in inner_ll]
+    left_xy = []
+    for lat, lon in outer_ll:
+        x, y = _latlon_to_xy_m(lat, lon, lat0, lon0)
+        left_xy.append({"x": x, "y": y})
+
+    right_xy = []
+    for lat, lon in inner_ll:
+        x, y = _latlon_to_xy_m(lat, lon, lat0, lon0)
+        right_xy.append({"x": x, "y": y})
 
     opts = OptimizeOptions(
         n_points=N,
@@ -160,6 +171,9 @@ def optimize_from_boundaries(track_id: str, n_points: int, ipopt_linear_solver: 
 
 def save_optimal_artifacts(track_id: str, result: dict) -> None:
     root = track_path(track_id)
+    if not (root / "racing_driver.csv").exists() and not (root / "racing_racing.csv").exists():
+        return
+    
     root.mkdir(parents=True, exist_ok=True)
 
     (root / "optimal.json").write_text(
@@ -264,15 +278,19 @@ def save_optimal_artifacts(track_id: str, result: dict) -> None:
                 speed_kmh[i] if speed_kmh[i] is not None else "",
                 a[i],
             ])
+from server.ws import manager  # ако вече не е импортнато
+import logging
+log = logging.getLogger("mgsa-server")
 
 async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, lap_id: str, n_points: int = 900) -> None:
+    log.info(f"[auto_pipeline] got lap_type={lap_type} lap_id={lap_id} track_id={track_id}")
     lk = _lock(track_id)
     async with lk:
         st = _state(track_id)
         if lap_type == "inner":
             st.inner_lap_id = lap_id
         elif lap_type == "outer":
-            st.outer_lap_id = lap_i
+            st.outer_lap_id = lap_id
         else:
             return
 
@@ -294,12 +312,22 @@ async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, 
             optimize_from_boundaries,
             track_id,
             int(n_points),
-            "ma57",
+            "mumps",
             0,
         )
 
+
+
         if isinstance(result, dict):
             await asyncio.to_thread(save_optimal_artifacts, track_id, result)
+            try:
+                await compare_driver_vs_optimal_internal(track_id=track_id, driver_kind="driver", n_points=min(300, int(n_points)))
+                await compare_driver_vs_optimal_internal(track_id=track_id, driver_kind="racing", n_points=min(300, int(n_points)))
+            except Exception as e:
+                from server.ws import manager
+                await manager.broadcast({"type": "compare_failed", "track_id": track_id, "error": str(e)})
+
+
 
             from server.ws import manager
             await manager.broadcast(
@@ -316,7 +344,7 @@ async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, 
             )
 
     except Exception as e:
-        from server.ws import manager
+        log.exception("[auto_pipeline] FAILED")
         await manager.broadcast({"type": "optimal_failed", "track_id": track_id, "error": str(e)})
         raise
 

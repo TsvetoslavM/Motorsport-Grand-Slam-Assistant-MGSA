@@ -154,10 +154,10 @@ def resample_scalar_by_arclen(values: List[float], xy: List[Tuple[float, float]]
         out.append(v0 + a * (v1 - v0))
     return out
 
-def ll_to_xy_list(latlon: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+def ll_to_xy_list(latlon, lat0: float, lon0: float):
     return [_latlon_to_xy_m(lat, lon, lat0, lon0) for (lat, lon) in latlon]
 
-async def compare(track_id: str, req: CompareRequest, token: dict = Depends(verify_token)):
+async def compare_core(track_id: str, req: CompareRequest) -> dict:
     try:
         from firmware.Optimal_Control.solver_api import OptimizeOptions, optimize_trajectory_from_two_lines
     except Exception as e:
@@ -169,21 +169,22 @@ async def compare(track_id: str, req: CompareRequest, token: dict = Depends(veri
     lat0 = (sum(p[0] for p in outer_latlon) + sum(p[0] for p in inner_latlon)) / (len(outer_latlon) + len(inner_latlon))
     lon0 = (sum(p[1] for p in outer_latlon) + sum(p[1] for p in inner_latlon)) / (len(outer_latlon) + len(inner_latlon))
 
-    outer_xy = ll_to_xy_list(outer_latlon)
-    inner_xy = ll_to_xy_list(inner_latlon)
+    outer_xy = ll_to_xy_list(outer_latlon, lat0, lon0)
+    inner_xy = ll_to_xy_list(inner_latlon, lat0, lon0)
 
     N = int(req.n_points)
     outer_xy_r = _resample_polyline(outer_xy, N)
     inner_xy_r = _resample_polyline(inner_xy, N)
 
-    left_line = [{"x": float(x), "y": float(y)} for (x, y) in inner_xy_r]
-    right_line = [{"x": float(x), "y": float(y)} for (x, y) in outer_xy_r]
+    left_line = [{"x": float(x), "y": float(y)} for (x, y) in outer_xy_r]
+    right_line = [{"x": float(x), "y": float(y)} for (x, y) in inner_xy_r]
 
     opts = OptimizeOptions(
         n_points=N,
         ipopt_max_iter=int(req.ipopt_max_iter),
         ipopt_print_level=int(req.ipopt_print_level),
     )
+
     sol = optimize_trajectory_from_two_lines(left_line, right_line, options=opts)
     optimal = sol.get("optimal") or []
     if len(optimal) < 3:
@@ -192,7 +193,7 @@ async def compare(track_id: str, req: CompareRequest, token: dict = Depends(veri
     opt_xy = [(float(p["x"]), float(p["y"])) for p in optimal]
     opt_v_mps = [max(0.1, float(p.get("speed_mps", 0.1))) for p in optimal]
 
-    drv_xy = ll_to_xy_list(driver_latlon)
+    drv_xy = ll_to_xy_list(driver_latlon, lat0, lon0)
     drv_xy_r = _resample_polyline(drv_xy, N)
 
     drv_v_kmh_r = resample_scalar_by_arclen(driver_v_kmh, drv_xy, N)
@@ -274,10 +275,29 @@ async def compare(track_id: str, req: CompareRequest, token: dict = Depends(veri
     }
     return resp
 
+
+@router.post("/track/{track_id}/compare")
+async def compare(track_id: str, req: CompareRequest, token: dict = Depends(verify_token)):
+    resp = await compare_core(track_id, req)
+    save_compare_json(track_id, resp, req.driver_kind)
+    return resp
+
+from fastapi.responses import FileResponse
+
+@router.get("/track/{track_id}/compare_{driver_kind}_vs_optimal.json")
+async def get_compare_json(track_id: str, driver_kind: str, token: dict = Depends(verify_token)):
+    p = track_path(track_id) / f"compare_{safe_kind(driver_kind)}_vs_optimal.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="compare json not found")
+    return FileResponse(str(p), media_type="application/json", filename=p.name)
+
+
 async def compare_driver_vs_optimal_internal(track_id: str, driver_kind: str = "driver", n_points: int = 250) -> dict:
     req = CompareRequest(driver_kind=driver_kind, n_points=n_points)
-    dummy_token = {"sub": "internal"}  # verify_token не се ползва вътре
-    return await compare(track_id, req, token=dummy_token)
+    resp = await compare_core(track_id, req)
+    save_compare_json(track_id, resp, driver_kind)
+    return resp
+
 
 def save_compare_json(track_id: str, payload: dict, driver_kind: str = "driver") -> str:
     p = track_path(track_id) / f"compare_{safe_kind(driver_kind)}_vs_optimal.json"

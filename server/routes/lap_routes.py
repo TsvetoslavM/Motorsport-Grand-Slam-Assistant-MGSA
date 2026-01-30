@@ -91,8 +91,8 @@ async def stop_lap(token: dict = Depends(verify_token)):
     set_current_lap_id(None)
 
     if track_name and lap_type in ("inner", "outer"):
-        n_points = min(900, max(50, int(point_count)))
-        asyncio.create_task(
+        n_points = min(300, max(50, int(point_count)))
+        t = asyncio.create_task(
             register_completed_lap_and_maybe_run(
                 track_id=track_name,
                 lap_type=lap_type,
@@ -100,6 +100,14 @@ async def stop_lap(token: dict = Depends(verify_token)):
                 n_points=n_points,
             )
         )
+
+        def _log_task_result(f):
+            exc = f.exception()
+            if exc:
+                logger.exception("auto_pipeline failed", exc_info=exc)
+
+        t.add_done_callback(_log_task_result)
+
 
     if track_name and lap_type == "driver":
         await build_racing_line_from_lap(
@@ -110,6 +118,7 @@ async def stop_lap(token: dict = Depends(verify_token)):
 
     if track_name and lap_type == "driver":
         asyncio.create_task(_auto_compare_driver(track_name, token, point_count))
+
 
 
     return {"lap_id": lap_id, "lap_time": lap_time, "points": point_count, "status": "saved"}

@@ -81,156 +81,187 @@
     </div>
   </div>
 
-<script>
-let map = L.map('map');
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
-
-let layerOuter=null, layerInner=null, layerOpt=null, layerDrv=null;
-let chart=null;
-let wsRef = null;
-let pingTimer = null;
-
-
-function toLatLng(arr){ return arr.map(p => [p.lat, p.lon]); }
-
-function setPolyline(ref, latlngs, opts){
-  if(ref) map.removeLayer(ref);
-  return L.polyline(latlngs, opts).addTo(map);
-}
-
-function fmt(x, d=2){ return (x===null || x===undefined) ? "-" : Number(x).toFixed(d); }
-
-function connectWS(){
-  const baseUrl = document.getElementById("baseUrl").value.trim();
-  const wsUrl = baseUrl.replace("http://","ws://").replace("https://","wss://") + "/ws/live";
-
-  if(wsRef){
-    try{ wsRef.close(); }catch(e){}
-    wsRef = null;
-  }
-
-  const ws = new WebSocket(wsUrl);
-  wsRef = ws;
-
-  ws.onopen = () => {
-    if(pingTimer) clearInterval(pingTimer);
-    pingTimer = setInterval(() => {
-      try{ ws.send("ping"); }catch(e){}
-    }, 15000);
-  };
-
-  ws.onmessage = (ev) => {
-    let msg = null;
-    try{ msg = JSON.parse(ev.data); }catch(e){ return; }
-
-    const trackId = document.getElementById("trackId").value.trim();
-
-    if(msg.type === "driver_vs_optimal_ready" && msg.track_id === trackId){
-      loadCompare();
+  <script>
+    let map = L.map('map');
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
+    
+    let layerOuter=null, layerInner=null, layerOpt=null, layerDrv=null;
+    let chart=null;
+    let wsRef = null;
+    let pingTimer = null;
+    
+    function fmt(x, d=2){ return (x===null || x===undefined) ? "-" : Number(x).toFixed(d); }
+    
+    function setPolyline(ref, latlngs, opts){
+      if(ref) map.removeLayer(ref);
+      return L.polyline(latlngs, opts).addTo(map);
     }
-
-    // по желание: ако искаш да refresh-не и когато optimal е готов
-    if(msg.type === "optimal_ready" && msg.track_id === trackId){
-      loadCompare();
+    
+    function csvToRows(csvText){
+      const lines = csvText.trim().split(/\r?\n/);
+      const hdr = lines[0].split(",");
+      const rows = [];
+      for(let i=1;i<lines.length;i++){
+        const cols = lines[i].split(",");
+        if(cols.length !== hdr.length) continue;
+        const obj = {};
+        for(let j=0;j<hdr.length;j++) obj[hdr[j]] = cols[j];
+        rows.push(obj);
+      }
+      return { hdr, rows };
     }
-  };
-
-  ws.onclose = () => {
-    if(pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-    setTimeout(connectWS, 1000);
-  };
-}
-
-async function loadCompare(){
-  const baseUrl = document.getElementById("baseUrl").value.trim();
-  const trackId = document.getElementById("trackId").value.trim();
-  const driverKind = document.getElementById("driverKind").value.trim();
-  const token = document.getElementById("token").value.trim();
-
-  const url = `${baseUrl}/api/analysis/compare/${encodeURIComponent(trackId)}`;
-  const payload = { driver_kind: driverKind, n_points: 250, segment_len_m: 20.0, ipopt_print_level: 0 };
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? {"Authorization": `Bearer ${token}`} : {})
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if(!resp.ok){
-    const txt = await resp.text();
-    alert(`HTTP ${resp.status}\n${txt}`);
-    return;
-  }
-
-  const data = await resp.json();
-
-  const outer = toLatLng(data.polylines.outer);
-  const inner = toLatLng(data.polylines.inner);
-  const opt = toLatLng(data.polylines.optimal);
-  const drv = toLatLng(data.polylines.driver);
-
-  layerOuter = setPolyline(layerOuter, outer, { weight: 4, color: "#FFD400", opacity: 0.9 });
-  layerInner = setPolyline(layerInner, inner, { weight: 4, color: "#2E6BFF", opacity: 0.9 });
-  layerOpt = setPolyline(layerOpt, opt, { weight: 4, color: "#00C853", opacity: 0.95 });
-  layerDrv = setPolyline(layerDrv, drv, { weight: 4, color: "#FF1744", opacity: 0.95 });
-
-  const allPts = outer.concat(inner).concat(opt).concat(drv);
-  map.fitBounds(L.latLngBounds(allPts));
-
-  document.getElementById("kpiTotalLoss").textContent = fmt(data.stats.total_time_loss_s, 3);
-  document.getElementById("kpiP95").textContent = fmt(data.stats.error_m.p95, 3);
-  document.getElementById("kpiMean").textContent = fmt(data.stats.error_m.mean, 3);
-  document.getElementById("kpiMax").textContent = fmt(data.stats.error_m.max, 3);
-
-  const s = data.series.s_m;
-  const tl = data.series.time_loss_s;
-
-  const ctx = document.getElementById('chart');
-  if(chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: s.map(x => Math.round(x)),
-      datasets: [{
-        label: 'time_loss_s (per step)',
-        data: tl,
-        tension: 0.2,
-        pointRadius: 0
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: true } },
-      scales: {
-        x: { display: false },
-        y: { beginAtZero: false }
+    
+    function toLatLngFromRows(rows, latKey, lonKey){
+      return rows.map(r => [Number(r[latKey]), Number(r[lonKey])]);
+    }
+    
+    function centerlineLatLng(boundRows){
+      // center = 0.5*(outer + inner) in lat/lon space (good enough for visualization)
+      return boundRows.map(r => {
+        const lat = 0.5*(Number(r.outer_lat) + Number(r.inner_lat));
+        const lon = 0.5*(Number(r.outer_lon) + Number(r.inner_lon));
+        return [lat, lon];
+      });
+    }
+    
+    async function fetchText(url, headers){
+      const resp = await fetch(url, { headers });
+      if(!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      return await resp.text();
+    }
+    
+    async function fetchJson(url, headers){
+      const resp = await fetch(url, { headers });
+      if(!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      return await resp.json();
+    }
+    
+    function connectWS(){
+      const baseUrl = document.getElementById("baseUrl").value.trim();
+      const wsUrl = baseUrl.replace("http://","ws://").replace("https://","wss://") + "/ws/live";
+    
+      if(wsRef){
+        try{ wsRef.close(); }catch(e){}
+        wsRef = null;
+      }
+    
+      const ws = new WebSocket(wsUrl);
+      wsRef = ws;
+    
+      ws.onopen = () => {
+        if(pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => { try{ ws.send("ping"); }catch(e){} }, 15000);
+      };
+    
+      ws.onmessage = (ev) => {
+        let msg = null;
+        try{ msg = JSON.parse(ev.data); }catch(e){ return; }
+        const trackId = document.getElementById("trackId").value.trim();
+    
+        if((msg.type === "driver_vs_optimal_ready" || msg.type === "optimal_ready") && msg.track_id === trackId){
+          loadAll();
+        }
+      };
+    
+      ws.onclose = () => {
+        if(pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+        setTimeout(connectWS, 1000);
+      };
+    }
+    
+    async function loadAll(){
+      const baseUrl = document.getElementById("baseUrl").value.trim();
+      const trackId = document.getElementById("trackId").value.trim();
+      const driverKind = document.getElementById("driverKind").value.trim();
+      const token = document.getElementById("token").value.trim();
+    
+      const headers = {
+        ...(token ? {"Authorization": `Bearer ${token}`} : {})
+      };
+    
+      // 1) boundaries (CSV)
+      const boundCsv = await fetchText(`${baseUrl}/api/track/${encodeURIComponent(trackId)}/boundaries`, headers);
+      const bound = csvToRows(boundCsv);
+    
+      const outer = toLatLngFromRows(bound.rows, "outer_lat", "outer_lon");
+      const inner = toLatLngFromRows(bound.rows, "inner_lat", "inner_lon");
+      const opt = centerlineLatLng(bound.rows);
+    
+      layerOuter = setPolyline(layerOuter, outer, { weight: 4, color: "#FFD400", opacity: 0.9 });
+      layerInner = setPolyline(layerInner, inner, { weight: 4, color: "#2E6BFF", opacity: 0.9 });
+      layerOpt   = setPolyline(layerOpt,   opt,   { weight: 4, color: "#00C853", opacity: 0.95 });
+    
+      // 2) driver line (CSV)
+      const drvCsv = await fetchText(`${baseUrl}/api/track/${encodeURIComponent(trackId)}/racing_line/${encodeURIComponent(driverKind)}`, headers);
+      const drv = csvToRows(drvCsv);
+      const drvLL = toLatLngFromRows(drv.rows, "lat", "lon");
+      layerDrv = setPolyline(layerDrv, drvLL, { weight: 4, color: "#FF1744", opacity: 0.95 });
+    
+      // fit bounds
+      const allPts = outer.concat(inner).concat(opt).concat(drvLL);
+      map.fitBounds(L.latLngBounds(allPts));
+    
+      // 3) compare json (optional)
+      try{
+        const cmp = await fetchJson(`${baseUrl}/api/track/${encodeURIComponent(trackId)}/compare_driver_vs_optimal.json`, headers);
+    
+        document.getElementById("kpiTotalLoss").textContent = fmt(cmp.stats.total_time_loss_s, 3);
+        document.getElementById("kpiP95").textContent       = fmt(cmp.stats.error_m.p95, 3);
+        document.getElementById("kpiMean").textContent      = fmt(cmp.stats.error_m.mean, 3);
+        document.getElementById("kpiMax").textContent       = fmt(cmp.stats.error_m.max, 3);
+    
+        const s = cmp.series.s_m;
+        const tl = cmp.series.time_loss_s;
+    
+        const ctx = document.getElementById('chart');
+        if(chart) chart.destroy();
+        chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: s.map(x => Math.round(x)),
+            datasets: [{
+              label: 'time_loss_s (per step)',
+              data: tl,
+              tension: 0.2,
+              pointRadius: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: true } },
+            scales: { x: { display: false }, y: { beginAtZero: false } }
+          }
+        });
+    
+        const tbody = document.getElementById("segTable");
+        tbody.innerHTML = "";
+        for(const seg of cmp.segments.top){
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${Math.round(seg.s0)}–${Math.round(seg.s1)}</td>
+            <td>${fmt(seg.time_loss_s, 3)}</td>
+            <td>${fmt(seg.mean_err_m, 3)}</td>
+            <td>${fmt(seg.max_err_m, 3)}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }catch(e){
+        // compare json not generated yet -> just show map
+        document.getElementById("kpiTotalLoss").textContent = "-";
+        document.getElementById("kpiP95").textContent = "-";
+        document.getElementById("kpiMean").textContent = "-";
+        document.getElementById("kpiMax").textContent = "-";
+        const tbody = document.getElementById("segTable");
+        tbody.innerHTML = "";
+        if(chart){ chart.destroy(); chart=null; }
       }
     }
-  });
-
-  const tbody = document.getElementById("segTable");
-  tbody.innerHTML = "";
-  for(const seg of data.segments.top){
-    const tr = document.createElement("tr");
-    const s0 = Math.round(seg.s0);
-    const s1 = Math.round(seg.s1);
-    tr.innerHTML = `
-      <td>${s0}–${s1}</td>
-      <td>${fmt(seg.time_loss_s, 3)}</td>
-      <td>${fmt(seg.mean_err_m, 3)}</td>
-      <td>${fmt(seg.max_err_m, 3)}</td>
-    `;
-    tbody.appendChild(tr);
-  }
-}
-
-document.getElementById("btnLoad").addEventListener("click", () => {
-  connectWS();
-  loadCompare();
-});
-
-</script>
+    
+    document.getElementById("btnLoad").addEventListener("click", () => {
+      connectWS();
+      loadAll();
+    });
+    </script>
+    
 </body>
 </html>
