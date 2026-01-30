@@ -1,129 +1,171 @@
-## Motorsport Grand Slam Assistant (MGSA)
+```md
+# 🏁 Motorsport Grand Slam Assistant (MGSA)
 
-MGSA is an end‑to‑end toolkit for **recording, analysing, and optimizing race laps**:
+**MGSA** is a full-stack motorsport analytics platform that turns **raw GPS laps** into  
+**optimal racing lines, data-driven insights, and real-time driver feedback**.
 
-- An **embedded runtime** on the car (buttons, GPS, IMU, LED HUD).
-- A **FastAPI server** on laptop/PC for storing laps, managing tracks and visualizing comparisons.
-- A **firmware toolkit** with curvature/segmentation tools and a full CasADi/IPOPT racing‑line optimizer.
-
-This repo contains everything needed to go from raw GPS laps to optimal racing lines and visual feedback for the driver.
+From the track → to algorithms → to visual guidance — all in one system.
 
 ---
 
-## Repository structure
+## ✨ What problem does MGSA solve?
 
-- `server/` – FastAPI backend (`server.server:app`), APIs for:
-  - recording laps, uploading boundaries, racing lines and comparisons,
-  - websocket live status and map/compare UIs.
-- `firmware/` – analysis/visualization toolkit:
-  - `curves.py`, `curvature.py`, `segmentation.py`, `smoothing.py` – curvature & segmentation.
-  - `visualization.py`, `track_coloring.py` – 2D/3D plots and HTML exports.
-  - `vmax_raceline/` – simple vmax vs curvature model.
-  - `Optimal_Control/` – CasADi/IPOPT optimal racing‑line solver (see its `README.md`).
-- `hardware/` – embedded runtime layout (based on `diploma/`):
-  - `diploma/runtime/app.py`, `state_machine.py`, `race_mode.py` – on‑car runtime + race feedback.
-  - `diploma/services/button_daemon.py` – GPIO button handler.
-  - `diploma/hud/led_strip_daemon.py` – LED HUD.
-  - `diploma/config/mgsa.yaml` – main on‑car config.
-- `templates/`, `server/static/` – HTML UIs for tracks, heatmaps, and driver vs optimal comparison.
-- `diagrams/` – PlantUML diagrams and exported PNGs for system and data‑flow architecture.
-- `tests/` – utilities and experiments for speed profiles, visualization, and server interaction.
+Most lap-analysis tools stop at *recording* data.  
+MGSA goes further:
 
-See also:
-
-- `server/README.md` – server details and routes.
-- `firmware/README.md` – firmware utilities and commands.
-- `firmware/Optimal_Control/README.md` – optimal‑control solver.
-- `hardware/README.md` – embedded/runtime overview.
+- **Understands the track geometry**
+- **Computes the optimal trajectory**
+- **Compares the driver to the ideal line**
+- **Closes the loop with real-time feedback in the car**
 
 ---
 
-## Installation
+## 🧩 System Overview
+
+MGSA consists of three tightly-integrated layers:
+
+### 🚗 On-car runtime
+- Physical buttons
+- GPS + IMU acquisition
+- LED / HUD driver feedback
+- Lap recording (inner / outer / racing)
+
+### 🧠 Analysis & Optimization
+- Curvature & segmentation tools
+- Heatmaps and speed profiles
+- CasADi + IPOPT optimal racing-line solver
+
+### 🌐 Server & Visualization
+- FastAPI backend
+- Track & lap storage
+- Interactive maps, comparisons and dashboards
+
+Everything lives in this repository.
+
+---
+
+## 📁 Repository structure
+
+```
+
+.
+├── server/                 # FastAPI backend + APIs
+│   ├── static/             # Web UIs (compare, maps, heatmaps)
+│   └── templates/          # HTML exports
+│
+├── firmware/               # Offline analysis & visualization
+│   ├── curves.py
+│   ├── curvature.py
+│   ├── segmentation.py
+│   ├── visualization.py
+│   ├── track_coloring.py
+│   ├── vmax_raceline/      # Simple vmax vs curvature model
+│   └── Optimal_Control/    # CasADi/IPOPT optimal control solver
+│
+├── hardware/               # Embedded runtime (on-car)
+│   └── diploma/
+│       ├── runtime/        # Main execution loop & state machine
+│       ├── services/       # Button daemon
+│       ├── hud/            # LED / HUD logic
+│       └── config/         # mgsa.yaml configuration
+│
+├── diagrams/               # PlantUML + exported PNGs
+├── tests/                  # Analysis experiments & utilities
+└── mgsa_data/              # Auto-generated runtime data (gitignored)
+
+````
+
+Each major folder contains its own README with deeper details.
+
+---
+
+## 🚀 Installation
 
 From the project root:
 
 ```bash
 python -m venv .venv
 .\.venv\Scripts\activate      # Windows
-# source .venv/bin/activate  # Linux/macOS
+# source .venv/bin/activate  # Linux / macOS
 
 pip install -r requirements.txt
-```
+````
 
-Requirements (high‑level):
+### Requirements (high-level)
 
-- Python 3.8+
-- FastAPI + Uvicorn
-- numpy, scipy, pandas, matplotlib, folium, plotly
-- casadi
-- pyyaml, gpiozero (for hardware runtime)
+* Python 3.8+
+* FastAPI + Uvicorn
+* numpy, scipy, pandas
+* matplotlib, folium, plotly
+* casadi
+* pyyaml
+* gpiozero (for embedded runtime)
 
 ---
 
-## Running the server
-
-From the project root:
+## 🌐 Running the server
 
 ```bash
 .\.venv\Scripts\activate
 uvicorn server.server:app --host 0.0.0.0 --port 8000
 ```
 
-Or:
+or
 
 ```bash
 python -m server.server
 ```
 
-The server will create `./mgsa_data` and a SQLite DB, plus CSV laps and track artifacts.
+The server will automatically create:
+
+* `./mgsa_data/`
+* a SQLite database
+* CSV artifacts for laps, boundaries and racing lines
 
 ---
 
-## Firmware tools (offline analysis)
+## 🧪 Firmware tools (offline analysis)
 
-Most offline analysis lives in `firmware/`. A common entrypoint is:
+Most offline experiments live in `firmware/`.
+
+### Curvature & segmentation
 
 ```bash
 python -m firmware.curves --points data/simple_track.csv --mad
 ```
 
-Examples:
+### Heatmaps
 
-- Curvature/segmentation demo:
+```bash
+python -m firmware.curves --points data/simple_track.csv --heatmap
+```
 
-  ```bash
-  python -m firmware.curves --points data/simple_track.csv --mad
-  ```
+### Interactive web visualization
 
-- 2D heatmap:
+```bash
+python -m firmware.curves \
+  --points data/simple_track.csv \
+  --web templates/heatmap.html
+```
 
-  ```bash
-  python -m firmware.curves --points data/simple_track.csv --heatmap
-  ```
+### Outline + racing line overlay
 
-- Interactive web heatmap:
+```bash
+python -m firmware.curves \
+  --outline-csv data/simple_track.csv \
+  --outline-web templates/outline.html \
+  --raceline data/raceline.csv \
+  --mad --factor 3
+```
 
-  ```bash
-  python -m firmware.curves --points data/simple_track.csv --web templates/heatmap.html
-  ```
-
-- Outline + racing line overlay:
-
-  ```bash
-  python -m firmware.curves \
-    --outline-csv data/simple_track.csv \
-    --outline-web templates/outline.html \
-    --raceline data/raceline.csv \
-    --mad --factor 3
-  ```
-
-For the full CasADi/IPOPT optimizer, see `firmware/Optimal_Control/README.md`.
+For the full optimal-control pipeline, see
+`firmware/Optimal_Control/README.md`
 
 ---
 
-## Embedded / hardware runtime (high‑level)
+## 🏎️ Embedded / on-car runtime
 
-On the device you typically run:
+Typical startup sequence on the device:
 
 ```bash
 python -m diploma.runtime.app --config diploma/config/mgsa.yaml
@@ -131,31 +173,52 @@ python -m diploma.services.button_daemon &
 python -m diploma.hud.led_strip_daemon &
 ```
 
-The runtime:
+### Runtime responsibilities
 
-- listens to GPS + IMU,
-- records outer/inner/race laps,
-- loads ideal trajectories from the server,
-- computes driver vs optimal feedback and drives LEDs / HUD.
+* Reads GPS + IMU
+* Detects laps & states (idle / record / race)
+* Sends data to the server
+* Receives optimal trajectories
+* Computes driver vs optimal deviation
+* Drives LED / HUD feedback in real time
 
-Configuration lives in `diploma/config/mgsa.yaml` (paths, GPIO, feedback timings, etc.).
+All hardware logic is configured via:
+
+```
+diploma/config/mgsa.yaml
+```
 
 ---
 
-## Quick start flows
+## ⚡ Quick start workflows
 
-- **Just play with curvature & heatmaps**:
+### Just explore track geometry
 
-  ```bash
-  python -m firmware.curves --points data/simple_track.csv --mad
-  python -m firmware.curves --points data/simple_track.csv --heatmap
-  ```
+```bash
+python -m firmware.curves --points data/simple_track.csv --mad
+python -m firmware.curves --points data/simple_track.csv --heatmap
+```
 
-- **Run the backend and compare driver vs optimal**:
+### Driver vs Optimal comparison
 
-  1. Start server: `uvicorn server.server:app --host 0.0.0.0 --port 8000`
-  2. Record or upload laps via the API.
-  3. Build boundaries and optimal line (`auto_pipeline.py` / UI).
-  4. Open the compare UI under `server/static/compare.html` / appropriate route.
+1. Start the server
+2. Record or upload laps
+3. Build boundaries & optimal line
+4. Open the comparison UI (`server/static/compare.html`)
 
-This README is intentionally high‑level; per‑module READMEs contain more details.
+---
+
+## 📚 Philosophy
+
+MGSA is designed to be:
+
+* Engineering-first
+* Research-friendly
+* Modular
+* Executable, not just theoretical
+
+This README is intentionally high-level.
+Each subsystem is documented where it lives.
+
+```
+```
