@@ -55,6 +55,26 @@ def start_runtime_if_needed(cfg):
     )
     write_pid(pid_file, p.pid)
 
+def start_live_uploader_if_needed(cfg):
+    state_dir = Path(cfg["paths"]["state_dir"])
+    pid_path = state_dir / "live_uploader.pid"
+
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+            os.kill(pid, 0)
+            return
+        except Exception:
+            pass
+
+    cmd = [
+        "python3",
+        str(Path(cfg["paths"]["project_root"]) / "runtime" / "live_uploader_daemon.py"),
+        "--config",
+        str(Path(cfg["paths"]["project_root"]) / "config" / "mgsa.yaml"),
+    ]
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 def write_command(cfg, cmd: dict):
     cmd_file = Path(cfg["paths"]["command_file"])
     tmp = cmd_file.with_suffix(".tmp")
@@ -95,6 +115,7 @@ def main():
 
     def set_mode_toggle(target_mode: str):
         start_runtime_if_needed(cfg)
+        start_live_uploader_if_needed(cfg)
 
         if last_mode["mode"] == target_mode:
             new_mode = "idle"

@@ -150,8 +150,8 @@ net:
   download:
     save_as_latest: true
   auth:
-    username: "cveto-msga"
-    password: "raspberry"
+    username: "admin"
+    password: "admin123"
 logging:
   level: "INFO"
   file: "/home/cveto-msga/mgsa/diploma/data/mgsa.log"
