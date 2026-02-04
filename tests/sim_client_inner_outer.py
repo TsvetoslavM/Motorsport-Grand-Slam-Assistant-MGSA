@@ -91,6 +91,139 @@ def _meters_to_latlon(dx_east_m: float, dy_north_m: float, lat0: float, lon0: fl
     lon = lon0 + (dx_east_m / m_per_deg_lon)
     return lat, lon
 
+def _stadium_center_xy(n_points: int, straight_m: float, radius_m: float) -> list[tuple[float, float]]:
+    """
+    Closed 'stadium' track (2 straights + 2 semicircles), centered around (0,0).
+    Returns N points roughly uniform by arc-length.
+    """
+    n = max(20, int(n_points))
+    Ls = float(straight_m)
+    R = float(radius_m)
+    if Ls < 1e-3:
+        Ls = 1.0
+    if R < 1.0:
+        R = 1.0
+
+    # Total length
+    total = 2.0 * Ls + 2.0 * math.pi * R
+    ds = total / n
+
+    pts: list[tuple[float, float]] = []
+    s = 0.0
+
+    def add_pt(x, y):
+        pts.append((x, y))
+
+    while len(pts) < n:
+        # Segment 1: top straight (x from -Ls/2 to +Ls/2), y=+R
+        if s < Ls:
+            x = -Ls / 2.0 + s
+            y = +R
+            add_pt(x, y)
+
+        # Segment 2: right semicircle (center at +Ls/2,0), angle from +pi/2 -> -pi/2
+        elif s < Ls + math.pi * R:
+            u = (s - Ls) / R  # radians along arc
+            ang = math.pi / 2.0 - u
+            cx = +Ls / 2.0
+            cy = 0.0
+            x = cx + R * math.cos(ang)
+            y = cy + R * math.sin(ang)
+            add_pt(x, y)
+
+        # Segment 3: bottom straight (x from +Ls/2 to -Ls/2), y=-R
+        elif s < 2.0 * Ls + math.pi * R:
+            t = s - (Ls + math.pi * R)
+            x = +Ls / 2.0 - t
+            y = -R
+            add_pt(x, y)
+
+        # Segment 4: left semicircle (center at -Ls/2,0), angle from -pi/2 -> +pi/2
+        else:
+            t = s - (2.0 * Ls + math.pi * R)
+            u = t / R
+            ang = -math.pi / 2.0 + u
+            cx = -Ls / 2.0
+            cy = 0.0
+            x = cx + R * math.cos(ang)
+            y = cy + R * math.sin(ang)
+            add_pt(x, y)
+
+        s += ds
+
+    return pts
+
+
+def _normals_closed_xy(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Unit left normals for closed polyline using central differences."""
+    n = len(pts)
+    out: list[tuple[float, float]] = []
+    for i in range(n):
+        x_prev, y_prev = pts[(i - 1) % n]
+        x_next, y_next = pts[(i + 1) % n]
+        dx = x_next - x_prev
+        dy = y_next - y_prev
+        L = math.hypot(dx, dy)
+        if L < 1e-9:
+            out.append((0.0, 0.0))
+            continue
+        tx = dx / L
+        ty = dy / L
+        # left normal
+        nx = -ty
+        ny = tx
+        out.append((nx, ny))
+    return out
+
+
+def _generate_inner_outer_stadium(
+    *,
+    lat0: float,
+    lon0: float,
+    center_xy: list[tuple[float, float]],
+    track_width_m: float,
+    fix_quality: int,
+    seed: int,
+    start_ts: datetime,
+    dt_s: float,
+    kind: str,   # "inner" | "outer"
+) -> list[dict]:
+    random.seed(seed)
+
+    n = len(center_xy)
+    normals = _normals_closed_xy(center_xy)
+
+    half_w = float(track_width_m) * 0.5
+    sign = -1.0 if kind == "inner" else +1.0
+
+    pts: list[dict] = []
+    for i in range(n):
+        cx, cy = center_xy[i]
+        nx, ny = normals[i]
+
+        x = cx + sign * half_w * nx
+        y = cy + sign * half_w * ny
+
+        lat, lon = _meters_to_latlon(x, y, lat0, lon0)
+        ts = (start_ts + timedelta(seconds=i * dt_s)).isoformat()
+
+        pts.append(
+            {
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "altitude": 550.0,
+                "fix_quality": int(fix_quality),
+                "speed": 0.0,
+                "timestamp": ts,
+                "hdop": 0.7,
+                "sats": 16,
+                "source": f"sim_{kind}",
+            }
+        )
+
+    return pts
+
+
 
 def _generate_loop_points(
     *,
@@ -232,6 +365,10 @@ def main() -> int:
     ap.add_argument("--wait-timeout-s", type=float, default=120.0)
     ap.add_argument("--wait-poll-s", type=float, default=1.0)
 
+    ap.add_argument("--straight-m", type=float, default=120.0)
+    ap.add_argument("--turn-radius-m", type=float, default=35.0)
+
+
     args = ap.parse_args()
 
     n = int(args.n_points)
@@ -256,31 +393,37 @@ def main() -> int:
 
     t0 = datetime.now(timezone.utc)
 
-    inner_pts = _generate_loop_points(
-        lat0=float(args.center_lat),
-        lon0=float(args.center_lon),
-        radius_m=inner_r,
-        n_points=n,
-        speed_kmh=float(args.speed_kmh),
-        noise_m=float(args.noise_m),
-        fix_quality=int(args.fix_quality),
-        seed=int(args.seed),
-        start_ts=t0,
-        dt_s=dt_s,
+    center = _stadium_center_xy(
+        n_points=250,
+        straight_m=100.0,
+        radius_m=35.0,
     )
 
-    outer_pts = _generate_loop_points(
+    inner_pts = _generate_inner_outer_stadium(
         lat0=float(args.center_lat),
         lon0=float(args.center_lon),
-        radius_m=outer_r,
-        n_points=n,
-        speed_kmh=float(args.speed_kmh),
-        noise_m=float(args.noise_m),
+        center_xy=center,
+        track_width_m=float(args.track_width_m),
         fix_quality=int(args.fix_quality),
-        seed=int(args.seed) + 1000,
-        start_ts=t0 + timedelta(seconds=(n + 10) * dt_s),
+        seed=1,
+        start_ts=t0,
         dt_s=dt_s,
+        kind="inner",
     )
+
+    outer_pts = _generate_inner_outer_stadium(
+        lat0=float(args.center_lat),
+        lon0=float(args.center_lon),
+        center_xy=center,
+        track_width_m=float(args.track_width_m),
+        fix_quality=int(args.fix_quality),
+        seed=2,
+        start_ts=t0,
+        dt_s=dt_s,
+        kind="outer",
+    )
+
+
 
     track_name = args.track_id  # IMPORTANT: server expects clean track_id
 

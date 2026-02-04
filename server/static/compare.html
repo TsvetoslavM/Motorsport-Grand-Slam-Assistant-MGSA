@@ -92,10 +92,36 @@
     
     function fmt(x, d=2){ return (x===null || x===undefined) ? "-" : Number(x).toFixed(d); }
     
-    function setPolyline(ref, latlngs, opts){
-      if(ref) map.removeLayer(ref);
-      return L.polyline(latlngs, opts).addTo(map);
+    function splitByJumps(latlngs, jumpM = 12) {
+      const R = 6371000;
+      function dist(a,b){
+        const lat1=a[0]*Math.PI/180, lat2=b[0]*Math.PI/180;
+        const dlat=lat2-lat1, dlon=(b[1]-a[1])*Math.PI/180;
+        const x = dlon*Math.cos((lat1+lat2)*0.5);
+        const y = dlat;
+        return Math.hypot(x,y)*R;
+      }
+
+      const parts = [];
+      let cur = [];
+      for (let i=0;i<latlngs.length;i++){
+        if (cur.length && dist(cur[cur.length-1], latlngs[i]) > jumpM){
+          parts.push(cur);
+          cur = [];
+        }
+        cur.push(latlngs[i]);
+      }
+      if (cur.length) parts.push(cur);
+      return parts;
     }
+
+    function setPolyline(refs, latlngs, opts){
+      // refs = array of layers
+      if(refs) refs.forEach(l => map.removeLayer(l));
+      const parts = splitByJumps(latlngs, 15);
+      return parts.map(p => L.polyline(p, opts).addTo(map));
+    }
+
     
     function csvToRows(csvText){
       const lines = csvText.trim().split(/\r?\n/);
@@ -185,20 +211,36 @@
     
       const outer = toLatLngFromRows(bound.rows, "outer_lat", "outer_lon");
       const inner = toLatLngFromRows(bound.rows, "inner_lat", "inner_lon");
-      const opt = centerlineLatLng(bound.rows);
     
       layerOuter = setPolyline(layerOuter, outer, { weight: 4, color: "#FFD400", opacity: 0.9 });
       layerInner = setPolyline(layerInner, inner, { weight: 4, color: "#2E6BFF", opacity: 0.9 });
-      layerOpt   = setPolyline(layerOpt,   opt,   { weight: 4, color: "#00C853", opacity: 0.95 });
-    
+
+      const optCsv = await fetchText(
+        `${baseUrl}/api/track/${encodeURIComponent(trackId)}/optimal_latlon.csv`,
+        headers
+      );
+      const optRows = csvToRows(optCsv);
+      const optLL = toLatLngFromRows(optRows.rows, "lat", "lon");
+
+      layerOpt = setPolyline(layerOpt, optLL, {
+        weight: 4,
+        color: "#00C853",
+        opacity: 0.95
+      });
+
+
       // 2) driver line (CSV)
-      const drvCsv = await fetchText(`${baseUrl}/api/track/${encodeURIComponent(trackId)}/racing_line/${encodeURIComponent(driverKind)}`, headers);
+      const drvCsv = await fetchText(
+        `${baseUrl}/api/track/${encodeURIComponent(trackId)}/racing_line/${encodeURIComponent(driverKind)}`,
+        headers
+      );
+
       const drv = csvToRows(drvCsv);
       const drvLL = toLatLngFromRows(drv.rows, "lat", "lon");
       layerDrv = setPolyline(layerDrv, drvLL, { weight: 4, color: "#FF1744", opacity: 0.95 });
     
       // fit bounds
-      const allPts = outer.concat(inner).concat(opt).concat(drvLL);
+      const allPts = outer.concat(inner).concat(optLL).concat(drvLL);
       map.fitBounds(L.latLngBounds(allPts));
     
       // 3) compare json (optional)
@@ -235,7 +277,11 @@
     
         const tbody = document.getElementById("segTable");
         tbody.innerHTML = "";
-        for(const seg of cmp.segments.top){
+
+        const segs = (cmp.segments && cmp.segments.top) ? [...cmp.segments.top] : [];
+        segs.sort((a, b) => Number(a.s0) - Number(b.s0));   // <-- ключът
+
+        for(const seg of segs){
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>${Math.round(seg.s0)}–${Math.round(seg.s1)}</td>
@@ -245,6 +291,7 @@
           `;
           tbody.appendChild(tr);
         }
+
       }catch(e){
         // compare json not generated yet -> just show map
         document.getElementById("kpiTotalLoss").textContent = "-";

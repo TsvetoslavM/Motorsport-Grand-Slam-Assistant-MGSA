@@ -89,6 +89,186 @@ def _meters_to_latlon(dx_east_m: float, dy_north_m: float, lat0: float, lon0: fl
     lon = lon0 + (dx_east_m / m_per_deg_lon)
     return lat, lon
 
+def _stadium_center_xy(n_points: int, straight_m: float, radius_m: float) -> list[tuple[float, float]]:
+    n = max(40, int(n_points))
+    Ls = float(straight_m)
+    R = float(radius_m)
+
+    if Ls < 1e-3:
+        Ls = 1.0
+    if R < 1.0:
+        R = 1.0
+
+    # Stadium aligned on X axis:
+    # top straight:  (-Ls/2,+R) -> (+Ls/2,+R)
+    # right arc:    center (+Ls/2,0) from +90° to -90° (clockwise, right turn)
+    # bottom straight: (+Ls/2,-R) -> (-Ls/2,-R)
+    # left arc:     center (-Ls/2,0) from -90° to +90° (clockwise, left turn)
+    total = 2.0 * Ls + 2.0 * math.pi * R
+    ds = total / n
+
+    pts: list[tuple[float, float]] = []
+    s = 0.0
+
+    while len(pts) < n:
+        if s < Ls:
+            # top straight
+            x = -Ls / 2.0 + s
+            y = +R
+            pts.append((x, y))
+
+        elif s < Ls + math.pi * R:
+            # right arc: +90 -> -90 (clockwise)
+            u = (s - Ls) / R  # 0..pi
+            ang = (math.pi / 2.0) - u
+            cx, cy = +Ls / 2.0, 0.0
+            x = cx + R * math.cos(ang)
+            y = cy + R * math.sin(ang)
+            pts.append((x, y))
+
+        elif s < 2.0 * Ls + math.pi * R:
+            # bottom straight
+            t = s - (Ls + math.pi * R)
+            x = +Ls / 2.0 - t
+            y = -R
+            pts.append((x, y))
+
+        else:
+            # left arc: -90 -> +90 (clockwise)
+            t = s - (2.0 * Ls + math.pi * R)
+            u = t / R  # 0..pi
+            ang = (-math.pi / 2.0) + u
+            cx, cy = -Ls / 2.0, 0.0
+            x = cx + R * math.cos(ang)
+            y = cy + R * math.sin(ang)
+            pts.append((x, y))
+
+        s += ds
+
+    return pts
+
+
+def _normals_closed_xy(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    n = len(pts)
+    out: list[tuple[float, float]] = []
+    for i in range(n):
+        x_prev, y_prev = pts[(i - 1) % n]
+        x_next, y_next = pts[(i + 1) % n]
+        dx = x_next - x_prev
+        dy = y_next - y_prev
+        L = math.hypot(dx, dy)
+        if L < 1e-9:
+            out.append((0.0, 0.0))
+            continue
+        tx = dx / L
+        ty = dy / L
+
+        # left normal (CCW)
+        out.append((-ty, tx))
+    return out
+
+
+def _generate_driver_points_stadium(
+    *,
+    lat0: float,
+    lon0: float,
+    center_xy: list[tuple[float, float]],
+    track_width_m: float,
+    driver_bias: float,   # 0..1
+    v_straight_kmh: float,
+    v_corner_kmh: float,
+    noise_m: float,
+    fix_quality: int,
+    seed: int,
+    start_ts: datetime,
+    dt_s: float,
+) -> list[dict]:
+    random.seed(seed)
+    n = len(center_xy)
+    normals = _normals_closed_xy(center_xy)
+
+    # signed corner factor using atan2(cross, dot)
+    corner_mag = [0.0] * n
+    corner_sign = [1.0] * n
+
+    for i in range(n):
+        x0, y0 = center_xy[i - 1]
+        x1, y1 = center_xy[i]
+        x2, y2 = center_xy[(i + 1) % n]
+
+        v1x, v1y = (x1 - x0), (y1 - y0)
+        v2x, v2y = (x2 - x1), (y2 - y1)
+
+        cross = v1x * v2y - v1y * v2x
+        dot = v1x * v2x + v1y * v2y
+
+        da_signed = math.atan2(cross, dot)  # -pi..pi
+        mag = abs(da_signed)
+        corner_mag[i] = min(1.0, mag / (math.pi / 3.0))
+        corner_sign[i] = 1.0 if da_signed >= 0.0 else -1.0
+
+    # smooth magnitude and sign (moving average)
+    sm_mag = [0.0] * n
+    sm_sgn = [0.0] * n
+    for i in range(n):
+        sm_mag[i] = (
+            corner_mag[i - 2] + corner_mag[i - 1] + corner_mag[i] +
+            corner_mag[(i + 1) % n] + corner_mag[(i + 2) % n]
+        ) / 5.0
+        sm_sgn[i] = (
+            corner_sign[i - 2] + corner_sign[i - 1] + corner_sign[i] +
+            corner_sign[(i + 1) % n] + corner_sign[(i + 2) % n]
+        ) / 5.0
+
+    corner_mag = sm_mag
+    corner_sign = [1.0 if x >= 0.0 else -1.0 for x in sm_sgn]
+
+    half_w = float(track_width_m) * 0.5
+    bias = max(0.0, min(1.0, float(driver_bias)))
+
+    pts: list[dict] = []
+    for i in range(n):
+        cx, cy = center_xy[i]
+        nx, ny = normals[i]
+
+        c = corner_mag[i]          # 0..1
+        sgn = corner_sign[i]       # -1 or +1
+
+        # NOTE:
+        # For your current normals (left normal), "inside" for a right turn is typically -normal,
+        # and for a left turn is +normal. The sgn from atan2(cross,dot) matches that.
+        target = (half_w) * c * sgn
+        offset = bias * target
+
+        x = cx + offset * nx
+        y = cy + offset * ny
+
+        if noise_m > 0.0:
+            x += (random.random() * 2.0 - 1.0) * noise_m
+            y += (random.random() * 2.0 - 1.0) * noise_m
+
+        v_kmh = (1.0 - c) * float(v_straight_kmh) + c * float(v_corner_kmh)
+        v_mps = max(0.0, v_kmh) / 3.6
+
+        lat, lon = _meters_to_latlon(x, y, lat0, lon0)
+        ts = (start_ts + timedelta(seconds=i * dt_s)).isoformat()
+
+        pts.append(
+            {
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "altitude": 550.0,
+                "fix_quality": int(fix_quality),
+                "speed": float(v_mps),
+                "timestamp": ts,
+                "hdop": 0.7,
+                "sats": 16,
+                "source": "sim_driver",
+            }
+        )
+
+    return pts
+
 
 def _generate_loop_points(
     *,
@@ -160,6 +340,15 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--realtime", action="store_true")
     ap.add_argument("--no-build", action="store_true", help="Do not call build_from_lap; only record lap.")
+
+    ap.add_argument("--straight-m", type=float, default=140.0)
+    ap.add_argument("--turn-radius-m", type=float, default=35.0)
+    ap.add_argument("--track-width-m", type=float, default=10.0)
+
+    ap.add_argument("--driver-bias", type=float, default=0.25, help="0..1 how much driver aims for racing line (0=center).")
+    ap.add_argument("--v-straight-kmh", type=float, default=110.0)
+    ap.add_argument("--v-corner-kmh", type=float, default=70.0)
+
     args = ap.parse_args()
 
     dt_s = 1.0 / max(0.1, float(args.hz))
@@ -178,18 +367,23 @@ def main() -> int:
 
     t0 = datetime.now(timezone.utc)
 
-    pts = _generate_loop_points(
+    center_xy = _stadium_center_xy(n_points=n, straight_m=float(args.straight_m), radius_m=float(args.turn_radius_m))
+
+    pts = _generate_driver_points_stadium(
         lat0=float(args.center_lat),
         lon0=float(args.center_lon),
-        radius_m=float(args.radius_m),
-        n_points=n,
-        speed_kmh=float(args.speed_kmh),
+        center_xy=center_xy,
+        track_width_m=float(args.track_width_m),
+        driver_bias=float(args.driver_bias),
+        v_straight_kmh=float(args.v_straight_kmh),
+        v_corner_kmh=float(args.v_corner_kmh),
         noise_m=float(args.noise_m),
         fix_quality=int(args.fix_quality),
         seed=int(args.seed),
         start_ts=t0,
         dt_s=dt_s,
     )
+
 
     track_name = args.track_id
     lap_id = _start_lap(args.base_url, token, track_name=track_name, lap_type=str(args.lap_type))

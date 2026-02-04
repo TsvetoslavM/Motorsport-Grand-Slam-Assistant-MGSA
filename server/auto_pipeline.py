@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from server.storage import load_xy
-from server.tracks import boundaries_csv_path, resample_polyline, track_path
+from server.tracks import boundaries_csv_path, resample_polyline, track_path, save_optimal_files
 from server.analysis_routes import compare_driver_vs_optimal_internal
 
 
@@ -171,8 +171,6 @@ def optimize_from_boundaries(track_id: str, n_points: int, ipopt_linear_solver: 
 
 def save_optimal_artifacts(track_id: str, result: dict) -> None:
     root = track_path(track_id)
-    if not (root / "racing_driver.csv").exists() and not (root / "racing_racing.csv").exists():
-        return
     
     root.mkdir(parents=True, exist_ok=True)
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import csv
 from pathlib import Path
@@ -74,3 +76,37 @@ def write_boundaries_meta(track_id: str, meta: dict):
     meta = {"updated": now_iso(), "track_id": track_id, **meta}
     write_json(meta_path, meta)
     return meta_path
+
+
+from pathlib import Path
+import json, csv
+from typing import Any, Dict, Iterable
+
+def save_optimal_files(track_id: str, payload: Dict[str, Any]) -> Dict[str, str]:
+    root = track_path(track_id)
+    root.mkdir(parents=True, exist_ok=True)
+
+    p_json = root / "optimal.json"
+    p_csv = root / "optimal_latlon.csv"  # временно XY вътре (виж т.3)
+
+    p_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    pts = payload.get("optimal") or []
+    if not pts:
+        raise RuntimeError("save_optimal_files: payload['optimal'] is empty/missing")
+
+    with p_csv.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["x", "y", "speed_mps", "time_s"])
+        w.writeheader()
+        for p in pts:
+            w.writerow({
+                "x": float(p["x"]),
+                "y": float(p["y"]),
+                "speed_mps": float(p.get("speed_mps", 0.0)),
+                "time_s": float(p.get("time_s", 0.0)),
+            })
+
+    return {
+        "optimal_json": str(p_json),
+        "optimal_latlon_csv": str(p_csv),
+    }
