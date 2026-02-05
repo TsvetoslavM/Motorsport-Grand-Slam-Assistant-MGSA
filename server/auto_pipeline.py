@@ -12,7 +12,7 @@ from server.storage import load_xy
 from server.tracks import boundaries_csv_path, resample_polyline, track_path, save_optimal_files
 from server.analysis_routes import compare_driver_vs_optimal_internal
 
-
+from firmware.vehicle import VehicleParams
 
 try:
     from firmware.Optimal_Control.solver_api import OptimizeOptions, optimize_trajectory_from_two_lines
@@ -140,9 +140,10 @@ def optimize_from_boundaries(track_id: str, n_points: int, ipopt_linear_solver: 
         n_points=N,
         ipopt_max_iter=2000,
         ipopt_print_level=int(ipopt_print_level),
-        ipopt_tol=1e-4,
+        ipopt_tol=1e-6,
         ipopt_acceptable_tol=1e-3,
         ipopt_linear_solver=str(ipopt_linear_solver),
+        vehicle=VehicleParams(),
     )
 
     result = optimize_trajectory_from_two_lines(left_xy, right_xy, options=opts)

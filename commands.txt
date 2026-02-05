@@ -1,0 +1,5 @@
+python sim_client_racing.py --base-url http://localhost:8000 --track-id mytrack8 --n-points 250 --hz 10 --track-width-m 8 --driver-bias 0.35 --v-straight-kmh 120 --v-corner-kmh 75 --workers 16 --wavy-base-radius-m 110 --wavy-a2 0.18 --wavy-a3 0.08 --wavy-a4 0.04 --wavy-squash-y 0.72
+
+python sim_client_inner_outer.py --base-url http://localhost:8000 --track-id mytrack8 --n-points 250 --track-width-m 8 --straight-m 100 --turn-radius-m 35 --workers 16   --wavy-base-radius-m 110 --wavy-a2 0.18 --wavy-a3 0.08 --wavy-a4 0.04 --wavy-squash-y 0.72
+
+python -m server.main

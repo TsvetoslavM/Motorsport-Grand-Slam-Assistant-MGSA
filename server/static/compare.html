@@ -11,21 +11,317 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .wrap { display: grid; grid-template-columns: 1.2fr 0.8fr; height: 100vh; }
+    :root{
+      --bg: #0b1020;
+      --panel: rgba(255,255,255,0.08);
+      --panel2: rgba(255,255,255,0.06);
+      --stroke: rgba(255,255,255,0.12);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.65);
+      --shadow: 0 20px 50px rgba(0,0,0,0.35);
+      --shadow2: 0 10px 24px rgba(0,0,0,0.25);
+      --radius: 16px;
+
+      /* “yellow point” accent vibe */
+      --accent: #ffd24a;
+      --accent2: #ff9f1a;
+      --good: #2ee59d;
+      --bad: #ff5c7a;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color: var(--text);
+      background:
+        radial-gradient(900px 700px at 30% 15%, rgba(255,210,74,0.18), transparent 60%),
+        radial-gradient(700px 600px at 80% 60%, rgba(46,229,157,0.12), transparent 60%),
+        radial-gradient(900px 800px at 10% 85%, rgba(255,92,122,0.10), transparent 55%),
+        linear-gradient(180deg, #070a14, #0b1020 40%, #070a14);
+    }
+
+    .wrap {
+      display: grid;
+      grid-template-columns: 1.25fr 0.75fr;
+      height: 100vh;
+    }
+
+    /* Map side */
     #map { height: 100vh; }
-    .panel { padding: 14px; overflow: auto; border-left: 1px solid #eee; }
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    input, button { font-size: 14px; padding: 8px 10px; }
-    button { cursor: pointer; }
-    .kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-    .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; }
-    .big { font-size: 18px; font-weight: 700; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 13px; }
-    th { position: sticky; top: 0; background: white; }
+    .leaflet-container {
+      background: #0b0f1d;
+    }
+    .leaflet-control-zoom, .leaflet-bar {
+      border: 1px solid rgba(255,255,255,0.12) !important;
+      border-radius: 12px !important;
+      overflow: hidden;
+      box-shadow: var(--shadow2);
+      backdrop-filter: blur(10px);
+    }
+    .leaflet-bar a {
+      background: rgba(255,255,255,0.08) !important;
+      color: var(--text) !important;
+      border-bottom: 1px solid rgba(255,255,255,0.10) !important;
+    }
+    .leaflet-bar a:hover {
+      background: rgba(255,255,255,0.14) !important;
+    }
+    .leaflet-control-attribution {
+      background: rgba(0,0,0,0.35) !important;
+      color: rgba(255,255,255,0.7) !important;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 4px 8px !important;
+      backdrop-filter: blur(8px);
+    }
+
+    /* Right panel */
+    .panel {
+      padding: 16px;
+      overflow: auto;
+      border-left: 1px solid rgba(255,255,255,0.10);
+      background:
+        radial-gradient(700px 500px at 50% 0%, rgba(255,210,74,0.10), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      backdrop-filter: blur(10px);
+    }
+
+    /* Header row */
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.04);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow2);
+    }
+
+    input, button {
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      outline: none;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+
+    input {
+      color: var(--text);
+      background: rgba(255,255,255,0.06);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+      transition: border-color .15s ease, transform .15s ease, background .15s ease;
+    }
+    input::placeholder { color: rgba(255,255,255,0.45); }
+    input:focus {
+      border-color: rgba(255,210,74,0.55);
+      background: rgba(255,255,255,0.08);
+      transform: translateY(-1px);
+    }
+
+    button {
+      cursor: pointer;
+      border: 1px solid rgba(255,210,74,0.55);
+      color: #1a1405;
+      background: linear-gradient(180deg, var(--accent), var(--accent2));
+      box-shadow: 0 10px 22px rgba(255,210,74,0.16);
+      transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 30px rgba(255,210,74,0.20);
+      filter: brightness(1.02);
+    }
+    button:active { transform: translateY(0px) scale(0.99); }
+
+    /* KPI grid */
+    .kpi {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .card {
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: rgba(255,255,255,0.05);
+      box-shadow: var(--shadow2);
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before{
+      content:"";
+      position:absolute;
+      inset: 0;
+      background:
+        radial-gradient(420px 220px at 0% 0%, rgba(255,210,74,0.14), transparent 55%),
+        radial-gradient(420px 220px at 100% 0%, rgba(46,229,157,0.10), transparent 55%);
+      opacity: 0.9;
+      pointer-events:none;
+    }
+    .card > * { position: relative; }
+
+    .big {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+      line-height: 1.1;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .card div:last-child {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+
+    /* Optional: small “badge” vibe for KPIs if you later add spans */
+    .pill {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.8);
+    }
+
+    /* Chart + tables */
     canvas { max-width: 100%; }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-top: 10px;
+      overflow: hidden;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.12);
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.85);
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+      font-size: 12.5px;
+      padding: 10px 10px;
+      backdrop-filter: blur(10px);
+      z-index: 1;
+    }
+
+    tbody td {
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      padding: 10px 10px;
+      text-align: left;
+      font-size: 13px;
+      color: rgba(255,255,255,0.88);
+    }
+
+    tbody tr:hover td {
+      background: rgba(255,255,255,0.05);
+    }
+
+    /* Nice scrollbars */
+    .panel::-webkit-scrollbar { width: 10px; }
+    .panel::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); border-radius: 10px; }
+    .panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 10px; }
+    .panel::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+
+    /* Responsive */
+    @media (max-width: 980px) {
+      .wrap { grid-template-columns: 1fr; }
+      #map { height: 55vh; }
+      .panel { border-left: none; border-top: 1px solid rgba(255,255,255,0.10); }
+    }
+
+    /* Optional: make KPI cards “feel” clickable if later you add click handlers */
+    .card { transition: transform .12s ease, border-color .12s ease, background .12s ease; }
+    .card:hover { transform: translateY(-1px); border-color: rgba(255,210,74,0.22); background: rgba(255,255,255,0.06); }
+
+    /* =======================
+      MGSA BRANDING
+      ======================= */
+
+    .mgsa-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background:
+        radial-gradient(400px 140px at 15% 0%, rgba(255,210,74,0.20), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+      box-shadow: 0 14px 30px rgba(0,0,0,0.35);
+      backdrop-filter: blur(12px);
+    }
+
+    .mgsa-logo {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.1;
+    }
+
+    .mgsa-accent {
+      font-size: 26px;
+      font-weight: 900;
+      letter-spacing: 2px;
+      background: linear-gradient(180deg, #ffd24a, #ff9f1a);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 6px 18px rgba(255,210,74,0.25);
+    }
+
+    .mgsa-sub {
+      font-size: 11px;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.65);
+      margin-top: 2px;
+    }
+
+    .mgsa-tag {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 1.4px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,210,74,0.45);
+      color: #1a1405;
+      background: linear-gradient(180deg, #ffd24a, #ff9f1a);
+      box-shadow: 0 8px 20px rgba(255,210,74,0.25);
+    }
+
+    /* =======================
+      SUBTLE MGSA WATERMARK
+      ======================= */
+
+    .panel::after {
+      content: "MGSA";
+      position: fixed;
+      right: 24px;
+      bottom: 18px;
+      font-size: 96px;
+      font-weight: 900;
+      letter-spacing: 6px;
+      color: rgba(255,255,255,0.035);
+      pointer-events: none;
+      user-select: none;
+    }
+
   </style>
+
 </head>
 <body>
   <div class="wrap">
@@ -39,6 +335,15 @@
         <input id="token" placeholder="Bearer token" style="width: 280px;">
         <button id="btnLoad">Load</button>
       </div>
+
+      <div class="mgsa-header">
+        <div class="mgsa-logo">
+          <span class="mgsa-accent">MGSA</span>
+          <span class="mgsa-sub">Motorsport Grand Slam Assistant</span>
+        </div>
+        <div class="mgsa-tag">COMPARE</div>
+      </div>
+
 
       <div class="kpi">
         <div class="card">

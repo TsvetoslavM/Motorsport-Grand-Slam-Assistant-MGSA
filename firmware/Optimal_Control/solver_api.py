@@ -109,7 +109,7 @@ def _ds_closed(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 @dataclass
 class OptimizeOptions:
-    n_points: int = 250
+    n_points: int = 1500
     ipopt_max_iter: int = 2000
     ipopt_print_level: int = 0
     ipopt_tol: float = 1e-4

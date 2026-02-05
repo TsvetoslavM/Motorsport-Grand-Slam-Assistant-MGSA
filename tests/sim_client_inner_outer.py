@@ -91,67 +91,50 @@ def _meters_to_latlon(dx_east_m: float, dy_north_m: float, lat0: float, lon0: fl
     lon = lon0 + (dx_east_m / m_per_deg_lon)
     return lat, lon
 
-def _stadium_center_xy(n_points: int, straight_m: float, radius_m: float) -> list[tuple[float, float]]:
-    """
-    Closed 'stadium' track (2 straights + 2 semicircles), centered around (0,0).
-    Returns N points roughly uniform by arc-length.
-    """
-    n = max(20, int(n_points))
-    Ls = float(straight_m)
-    R = float(radius_m)
-    if Ls < 1e-3:
-        Ls = 1.0
-    if R < 1.0:
-        R = 1.0
+def _signed_area_xy(pts: list[tuple[float, float]]) -> float:
+    a = 0.0
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return 0.5 * a  # >0 CCW, <0 CW
 
-    # Total length
-    total = 2.0 * Ls + 2.0 * math.pi * R
-    ds = total / n
+
+def _ensure_ccw_xy(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    return pts if _signed_area_xy(pts) > 0.0 else list(reversed(pts))
+
+def _wavy_roadcourse_center_xy(
+    n_points: int,
+    base_radius_m: float,
+    a2: float,
+    a3: float,
+    a4: float,
+    rotate_deg: float = 0.0,
+    squash_y: float = 0.75,
+) -> list[tuple[float, float]]:
+    n = max(20, int(n_points))
+    R0 = max(5.0, float(base_radius_m))
+
+    rot = math.radians(float(rotate_deg))
+    cr = math.cos(rot)
+    sr = math.sin(rot)
 
     pts: list[tuple[float, float]] = []
-    s = 0.0
+    for i in range(n):
+        th = 2.0 * math.pi * (i / n)
 
-    def add_pt(x, y):
-        pts.append((x, y))
+        r = R0 * (1.0 + float(a2) * math.cos(2.0 * th) + float(a3) * math.cos(3.0 * th) + float(a4) * math.cos(4.0 * th))
 
-    while len(pts) < n:
-        # Segment 1: top straight (x from -Ls/2 to +Ls/2), y=+R
-        if s < Ls:
-            x = -Ls / 2.0 + s
-            y = +R
-            add_pt(x, y)
+        x = r * math.cos(th)
+        y = r * math.sin(th) * float(squash_y)
 
-        # Segment 2: right semicircle (center at +Ls/2,0), angle from +pi/2 -> -pi/2
-        elif s < Ls + math.pi * R:
-            u = (s - Ls) / R  # radians along arc
-            ang = math.pi / 2.0 - u
-            cx = +Ls / 2.0
-            cy = 0.0
-            x = cx + R * math.cos(ang)
-            y = cy + R * math.sin(ang)
-            add_pt(x, y)
+        xr = x * cr - y * sr
+        yr = x * sr + y * cr
+        pts.append((xr, yr))
 
-        # Segment 3: bottom straight (x from +Ls/2 to -Ls/2), y=-R
-        elif s < 2.0 * Ls + math.pi * R:
-            t = s - (Ls + math.pi * R)
-            x = +Ls / 2.0 - t
-            y = -R
-            add_pt(x, y)
+    return _ensure_ccw_xy(pts)
 
-        # Segment 4: left semicircle (center at -Ls/2,0), angle from -pi/2 -> +pi/2
-        else:
-            t = s - (2.0 * Ls + math.pi * R)
-            u = t / R
-            ang = -math.pi / 2.0 + u
-            cx = -Ls / 2.0
-            cy = 0.0
-            x = cx + R * math.cos(ang)
-            y = cy + R * math.sin(ang)
-            add_pt(x, y)
-
-        s += ds
-
-    return pts
 
 
 def _normals_closed_xy(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -368,6 +351,14 @@ def main() -> int:
     ap.add_argument("--straight-m", type=float, default=120.0)
     ap.add_argument("--turn-radius-m", type=float, default=35.0)
 
+    ap.add_argument("--wavy-base-radius-m", type=float, default=90.0)
+    ap.add_argument("--wavy-a2", type=float, default=0.28)
+    ap.add_argument("--wavy-a3", type=float, default=0.14)
+    ap.add_argument("--wavy-a4", type=float, default=0.08)
+    ap.add_argument("--wavy-rotate-deg", type=float, default=15.0)
+    ap.add_argument("--wavy-squash-y", type=float, default=0.70)
+
+
 
     args = ap.parse_args()
 
@@ -393,11 +384,17 @@ def main() -> int:
 
     t0 = datetime.now(timezone.utc)
 
-    center = _stadium_center_xy(
-        n_points=250,
-        straight_m=100.0,
-        radius_m=35.0,
+    center = _wavy_roadcourse_center_xy(
+        n_points=n,
+        base_radius_m=float(args.wavy_base_radius_m),
+        a2=float(args.wavy_a2),
+        a3=float(args.wavy_a3),
+        a4=float(args.wavy_a4),
+        rotate_deg=float(args.wavy_rotate_deg),
+        squash_y=float(args.wavy_squash_y),
     )
+
+
 
     inner_pts = _generate_inner_outer_stadium(
         lat0=float(args.center_lat),

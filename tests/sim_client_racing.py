@@ -9,6 +9,8 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 
 def _http_json(method: str, url: str, payload: dict | None = None, headers: dict | None = None) -> dict:
@@ -89,63 +91,56 @@ def _meters_to_latlon(dx_east_m: float, dy_north_m: float, lat0: float, lon0: fl
     lon = lon0 + (dx_east_m / m_per_deg_lon)
     return lat, lon
 
-def _stadium_center_xy(n_points: int, straight_m: float, radius_m: float) -> list[tuple[float, float]]:
+def _signed_area_xy(pts: list[tuple[float, float]]) -> float:
+    a = 0.0
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return 0.5 * a  # >0 CCW, <0 CW
+
+
+def _ensure_ccw_xy(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    return pts if _signed_area_xy(pts) > 0.0 else list(reversed(pts))
+
+
+def _wavy_roadcourse_center_xy(
+    n_points: int,
+    base_radius_m: float,
+    a2: float,
+    a3: float,
+    a4: float,
+    rotate_deg: float = 0.0,
+    squash_y: float = 0.75,
+) -> list[tuple[float, float]]:
     n = max(40, int(n_points))
-    Ls = float(straight_m)
-    R = float(radius_m)
+    R0 = max(5.0, float(base_radius_m))
 
-    if Ls < 1e-3:
-        Ls = 1.0
-    if R < 1.0:
-        R = 1.0
-
-    # Stadium aligned on X axis:
-    # top straight:  (-Ls/2,+R) -> (+Ls/2,+R)
-    # right arc:    center (+Ls/2,0) from +90° to -90° (clockwise, right turn)
-    # bottom straight: (+Ls/2,-R) -> (-Ls/2,-R)
-    # left arc:     center (-Ls/2,0) from -90° to +90° (clockwise, left turn)
-    total = 2.0 * Ls + 2.0 * math.pi * R
-    ds = total / n
+    rot = math.radians(float(rotate_deg))
+    cr = math.cos(rot)
+    sr = math.sin(rot)
 
     pts: list[tuple[float, float]] = []
-    s = 0.0
+    for i in range(n):
+        th = 2.0 * math.pi * (i / n)
 
-    while len(pts) < n:
-        if s < Ls:
-            # top straight
-            x = -Ls / 2.0 + s
-            y = +R
-            pts.append((x, y))
+        r = R0 * (
+            1.0
+            + float(a2) * math.cos(2.0 * th)
+            + float(a3) * math.cos(3.0 * th)
+            + float(a4) * math.cos(4.0 * th)
+        )
 
-        elif s < Ls + math.pi * R:
-            # right arc: +90 -> -90 (clockwise)
-            u = (s - Ls) / R  # 0..pi
-            ang = (math.pi / 2.0) - u
-            cx, cy = +Ls / 2.0, 0.0
-            x = cx + R * math.cos(ang)
-            y = cy + R * math.sin(ang)
-            pts.append((x, y))
+        x = r * math.cos(th)
+        y = r * math.sin(th) * float(squash_y)
 
-        elif s < 2.0 * Ls + math.pi * R:
-            # bottom straight
-            t = s - (Ls + math.pi * R)
-            x = +Ls / 2.0 - t
-            y = -R
-            pts.append((x, y))
+        xr = x * cr - y * sr
+        yr = x * sr + y * cr
+        pts.append((xr, yr))
 
-        else:
-            # left arc: -90 -> +90 (clockwise)
-            t = s - (2.0 * Ls + math.pi * R)
-            u = t / R  # 0..pi
-            ang = (-math.pi / 2.0) + u
-            cx, cy = -Ls / 2.0, 0.0
-            x = cx + R * math.cos(ang)
-            y = cy + R * math.sin(ang)
-            pts.append((x, y))
+    return _ensure_ccw_xy(pts)
 
-        s += ds
-
-    return pts
 
 
 def _normals_closed_xy(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -168,7 +163,7 @@ def _normals_closed_xy(pts: list[tuple[float, float]]) -> list[tuple[float, floa
     return out
 
 
-def _generate_driver_points_stadium(
+def _generate_driver_points_from_centerline(
     *,
     lat0: float,
     lon0: float,
@@ -349,6 +344,17 @@ def main() -> int:
     ap.add_argument("--v-straight-kmh", type=float, default=110.0)
     ap.add_argument("--v-corner-kmh", type=float, default=70.0)
 
+    ap.add_argument("--wavy-base-radius-m", type=float, default=110.0)
+    ap.add_argument("--wavy-a2", type=float, default=0.18)
+    ap.add_argument("--wavy-a3", type=float, default=0.08)
+    ap.add_argument("--wavy-a4", type=float, default=0.04)
+    ap.add_argument("--wavy-rotate-deg", type=float, default=15.0)
+    ap.add_argument("--wavy-squash-y", type=float, default=0.72)
+
+    ap.add_argument("--workers", type=int, default=8, help="Parallel point sends. 1 = sequential.")
+
+
+
     args = ap.parse_args()
 
     dt_s = 1.0 / max(0.1, float(args.hz))
@@ -367,9 +373,17 @@ def main() -> int:
 
     t0 = datetime.now(timezone.utc)
 
-    center_xy = _stadium_center_xy(n_points=n, straight_m=float(args.straight_m), radius_m=float(args.turn_radius_m))
+    center_xy = _wavy_roadcourse_center_xy(
+        n_points=n,
+        base_radius_m=float(args.wavy_base_radius_m),
+        a2=float(args.wavy_a2),
+        a3=float(args.wavy_a3),
+        a4=float(args.wavy_a4),
+        rotate_deg=float(args.wavy_rotate_deg),
+        squash_y=float(args.wavy_squash_y),
+    )
 
-    pts = _generate_driver_points_stadium(
+    pts = _generate_driver_points_from_centerline(
         lat0=float(args.center_lat),
         lon0=float(args.center_lon),
         center_xy=center_xy,
@@ -389,12 +403,30 @@ def main() -> int:
     lap_id = _start_lap(args.base_url, token, track_name=track_name, lap_type=str(args.lap_type))
     print(f"[OK] Started lap: {lap_id} track_name={track_name} lap_type={args.lap_type}")
 
-    for i, p in enumerate(pts, 1):
-        _send_point(args.base_url, token, p)
-        if i % 50 == 0 or i == len(pts):
-            print(f"  sent {i}/{len(pts)}")
-        if args.realtime:
-            time.sleep(dt_s)
+    workers = int(args.workers)
+
+    if args.realtime and workers > 1:
+        print("[WARN] --realtime is set; forcing --workers=1 for correct timing.")
+        workers = 1
+
+    if workers <= 1:
+        for i, p in enumerate(pts, 1):
+            _send_point(args.base_url, token, p)
+            if i % 50 == 0 or i == len(pts):
+                print(f"  sent {i}/{len(pts)}")
+            if args.realtime:
+                time.sleep(dt_s)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_send_point, args.base_url, token, p) for p in pts]
+            done = 0
+            total = len(futs)
+            for f in as_completed(futs):
+                _ = f.result()
+                done += 1
+                if done % 100 == 0 or done == total:
+                    print(f"  sent {done}/{total}")
+
 
 
     res = _stop_lap(args.base_url, token)
