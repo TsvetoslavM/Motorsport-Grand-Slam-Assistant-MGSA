@@ -48,7 +48,8 @@ class BoundariesUpload(BaseModel):
 
 class StartLapRequest(BaseModel):
     track_name: str
-    lap_type: str = "racing"  # "inner" | "outer" | "racing"
+    lap_type: str = "racing"  # "inner" | "outer" | "racing" | "driver"
+    session_id: Optional[str] = None
 
 
 class RacingPoint(BaseModel):

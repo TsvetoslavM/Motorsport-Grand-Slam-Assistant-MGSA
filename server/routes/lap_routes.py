@@ -33,25 +33,38 @@ async def start_lap(req: StartLapRequest, token: dict = Depends(verify_token)):
     lap_id = f"lap_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     start_time = now_iso()
 
+    session_id = req.session_id or f"sess_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}"
+
     db_insert_lap(lap_id, req.track_name, start_time)
     set_current_lap_id(lap_id)
     ensure_csv_header(lap_csv_path(lap_id))
+
     meta_path = track_path(req.track_name) / f"{lap_id}.meta.json"
     meta_path.write_text(
-        json.dumps({"lap_id": lap_id, "track_name": req.track_name, "lap_type": req.lap_type}, ensure_ascii=False),
+        json.dumps(
+            {
+                "lap_id": lap_id,
+                "track_name": req.track_name,
+                "lap_type": req.lap_type,
+                "session_id": session_id,
+            },
+            ensure_ascii=False
+        ),
         encoding="utf-8",
     )
 
-    logger.info(f"Started lap: {lap_id} track={req.track_name}")
+    logger.info(f"Started lap: {lap_id} track={req.track_name} session={session_id} type={req.lap_type}")
 
     await manager.broadcast({
-    "type": "lap_started",
-    "lap_id": lap_id,
-    "track_name": req.track_name,
-    "lap_type": req.lap_type,
-    "start_time": start_time
+        "type": "lap_started",
+        "lap_id": lap_id,
+        "track_name": req.track_name,
+        "lap_type": req.lap_type,
+        "session_id": session_id,
+        "start_time": start_time
     })
-    return {"lap_id": lap_id, "status": "recording", "start_time": start_time}
+    return {"lap_id": lap_id, "status": "recording", "start_time": start_time, "session_id": session_id}
+
 
 @router.post("/stop")
 async def stop_lap(token: dict = Depends(verify_token)):
@@ -80,21 +93,28 @@ async def stop_lap(token: dict = Depends(verify_token)):
     track_name = lap.get("track_name")
 
     lap_type = None
+    session_id = None
     try:
         meta_path = track_path(track_name) / f"{lap_id}.meta.json"
         if meta_path.exists():
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             lap_type = meta.get("lap_type")
+            session_id = meta.get("session_id")
     except Exception:
         lap_type = None
+        session_id = None
+
 
     set_current_lap_id(None)
+    t = None
+
 
     if track_name and lap_type in ("inner", "outer"):
         n_points = min(300, max(50, int(point_count)))
-        t = asyncio.create_task(
+        asyncio.create_task(
             register_completed_lap_and_maybe_run(
                 track_id=track_name,
+                session_id=session_id,
                 lap_type=lap_type,
                 lap_id=lap_id,
                 n_points=n_points,
@@ -106,7 +126,9 @@ async def stop_lap(token: dict = Depends(verify_token)):
             if exc:
                 logger.exception("auto_pipeline failed", exc_info=exc)
 
+    if t is not None:
         t.add_done_callback(_log_task_result)
+
 
 
     if track_name and lap_type == "driver":

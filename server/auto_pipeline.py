@@ -23,6 +23,9 @@ except Exception as e:
 else:
     _IMPORT_ERR = ""
 
+from typing import Dict, Optional, Tuple
+Key = Tuple[str, str]  # (track_id, session_id)
+
 
 @dataclass
 class PendingTrack:
@@ -32,20 +35,23 @@ class PendingTrack:
     last_pair: Optional[Tuple[str, str]] = None
 
 
-_pending: Dict[str, PendingTrack] = {}
-_locks: Dict[str, asyncio.Lock] = {}
+_pending: Dict[Key, PendingTrack] = {}
+_locks: Dict[Key, asyncio.Lock] = {}
 
 
-def _lock(track_id: str) -> asyncio.Lock:
-    if track_id not in _locks:
-        _locks[track_id] = asyncio.Lock()
-    return _locks[track_id]
+def _key(track_id: str, session_id: Optional[str]) -> Key:
+    sid = session_id or "default"
+    return (track_id, sid)
 
+def _lock(key: Key) -> asyncio.Lock:
+    if key not in _locks:
+        _locks[key] = asyncio.Lock()
+    return _locks[key]
 
-def _state(track_id: str) -> PendingTrack:
-    if track_id not in _pending:
-        _pending[track_id] = PendingTrack()
-    return _pending[track_id]
+def _state(key: Key) -> PendingTrack:
+    if key not in _pending:
+        _pending[key] = PendingTrack()
+    return _pending[key]
 
 
 def _latlon_to_xy_m(lat: float, lon: float, lat0: float, lon0: float) -> Tuple[float, float]:
@@ -281,11 +287,14 @@ from server.ws import manager
 import logging
 log = logging.getLogger("mgsa-server")
 
-async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, lap_id: str, n_points: int = 900) -> None:
-    log.info(f"[auto_pipeline] got lap_type={lap_type} lap_id={lap_id} track_id={track_id}")
-    lk = _lock(track_id)
+async def register_completed_lap_and_maybe_run(*, track_id: str, session_id: Optional[str], lap_type: str, lap_id: str, n_points: int = 900) -> None:
+    key = _key(track_id, session_id)
+    log.info(f"[auto_pipeline] got track_id={track_id} session_id={key[1]} lap_type={lap_type} lap_id={lap_id}")
+
+    lk = _lock(key)
     async with lk:
-        st = _state(track_id)
+        st = _state(key)
+
         if lap_type == "inner":
             st.inner_lap_id = lap_id
         elif lap_type == "outer":
@@ -315,24 +324,19 @@ async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, 
             0,
         )
 
-
-
         if isinstance(result, dict):
             await asyncio.to_thread(save_optimal_artifacts, track_id, result)
             try:
                 await compare_driver_vs_optimal_internal(track_id=track_id, driver_kind="driver", n_points=min(300, int(n_points)))
                 await compare_driver_vs_optimal_internal(track_id=track_id, driver_kind="racing", n_points=min(300, int(n_points)))
             except Exception as e:
-                from server.ws import manager
                 await manager.broadcast({"type": "compare_failed", "track_id": track_id, "error": str(e)})
 
-
-
-            from server.ws import manager
             await manager.broadcast(
                 {
                     "type": "optimal_ready",
                     "track_id": track_id,
+                    "session_id": key[1],
                     "n_points": int(n_points),
                     "artifacts": {
                         "optimal_json": f"/api/track/{track_id}/optimal.json",
@@ -342,13 +346,17 @@ async def register_completed_lap_and_maybe_run(*, track_id: str, lap_type: str, 
                 }
             )
 
+            async with _lock(key):
+                _pending.pop(key, None)
+                _locks.pop(key, None)
+
     except Exception as e:
         log.exception("[auto_pipeline] FAILED")
-        await manager.broadcast({"type": "optimal_failed", "track_id": track_id, "error": str(e)})
+        await manager.broadcast({"type": "optimal_failed", "track_id": track_id, "session_id": key[1], "error": str(e)})
         raise
-
-
     finally:
-        async with _lock(track_id):
-            _state(track_id).running = False
+        async with _lock(key):
+            if key in _pending:
+                _pending[key].running = False
+
 

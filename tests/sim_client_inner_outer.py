@@ -49,12 +49,12 @@ def _login(base_url: str, username: str, password: str) -> str:
     return resp["access_token"]
 
 
-def _start_lap(base_url: str, token: str, track_name: str, lap_type: str) -> str:
+def _start_lap(base_url: str, token: str, track_name: str, lap_type: str, session_id: str) -> str:
     headers = {"Authorization": f"Bearer {token}"}
     resp = _http_json(
         "POST",
         f"{base_url}/api/lap/start",
-        {"track_name": track_name, "lap_type": lap_type},
+        {"track_name": track_name, "lap_type": lap_type, "session_id": session_id},
         headers=headers,
     )
     return str(resp["lap_id"])
@@ -259,12 +259,13 @@ def _send_lap_fast(
     token: str,
     track_name: str,
     lap_type: str,
+    session_id: str,
     points: list[dict],
     workers: int,
 ) -> str:
-    lap_id = _start_lap(base_url, token, track_name, lap_type)
-    print(f"[OK] Started lap: {lap_id} track_name={track_name} lap_type={lap_type}")
 
+    lap_id = _start_lap(base_url, token, track_name, lap_type, session_id)
+    print(f"[OK] Started lap: {lap_id} track_name={track_name} lap_type={lap_type} session_id={session_id}")
     if workers <= 1:
         for p in points:
             _send_point(base_url, token, p)
@@ -384,6 +385,10 @@ def main() -> int:
 
     t0 = datetime.now(timezone.utc)
 
+    boundary_session_id = f"bset_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}"
+    print(f"[*] boundary_session_id={boundary_session_id}")
+
+
     center = _wavy_roadcourse_center_xy(
         n_points=n,
         base_radius_m=float(args.wavy_base_radius_m),
@@ -430,6 +435,7 @@ def main() -> int:
         token=token,
         track_name=track_name,
         lap_type="inner",
+        session_id=boundary_session_id,
         points=inner_pts,
         workers=int(args.workers),
     )
@@ -440,6 +446,7 @@ def main() -> int:
         token=token,
         track_name=track_name,
         lap_type="outer",
+        session_id=boundary_session_id,
         points=outer_pts,
         workers=int(args.workers),
     )
