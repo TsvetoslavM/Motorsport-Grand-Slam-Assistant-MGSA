@@ -7,18 +7,6 @@ from typing import Optional
 
 @dataclass
 class ImuSample:
-    """
-    Single IMU sample in vehicle coordinates.
-
-    Expected JSON schema in state_dir/imu_state.json (produced by your IMU daemon):
-      {
-        "ts": <unix_time_seconds>,
-        "a_lat_mps2": <float>,   # lateral acceleration [m/s^2] (left +)
-        "a_lon_mps2": <float>,   # longitudinal acceleration [m/s^2] (forward +)
-        "yaw_rate_rad_s": <float>
-      }
-    """
-
     ts: float
     a_lat_mps2: float
     a_lon_mps2: float
@@ -26,29 +14,78 @@ class ImuSample:
 
 
 class ImuStateReader:
-    """
-    Lightweight bridge to an external IMU daemon.
-
-    The daemon is responsible for reading the SEN0142 over I2C and periodically
-    writing the latest fused sample into state_dir/imu_state.json using the schema
-    documented in ImuSample above.
-
-    This reader:
-      - Reads the JSON file when it changes (mtime-based).
-      - Rejects samples that are too old (max_age_s).
-      - Applies an EMA to smooth a_lat/a_lon/yaw_rate to the race tick rate.
-    """
-
-    def __init__(self, state_dir: Path, max_age_s: float = 0.3, alpha: float = 0.3):
+    def __init__(
+        self,
+        state_dir: Path,
+        max_age_s: float = 0.3,
+        alpha: float = 0.3,
+        calibration_duration_s: float = 3.0,
+    ):
         self._path = Path(state_dir) / "imu_state.json"
         self._max_age_s = float(max_age_s)
         self._alpha = float(alpha)
 
         self._last_mtime: float = 0.0
         self._raw: Optional[ImuSample] = None
-
-        # Smoothed values
         self._ema: Optional[ImuSample] = None
+
+        self._calibrated = False
+        self._calibration_start_ts: Optional[float] = None
+        self._calibration_duration_s = float(calibration_duration_s)
+        self._calibration_samples: list[tuple[float, float, float]] = []
+
+        self._bias_a_lat = 0.0
+        self._bias_a_lon = 0.0
+        self._bias_yaw = 0.0
+
+    def _is_plausible(self, a_lat: float, a_lon: float, yaw: float) -> bool:
+        if abs(a_lat) > 30.0:
+            return False
+        if abs(a_lon) > 30.0:
+            return False
+        if abs(yaw) > 6.0:
+            return False
+        return True
+
+    def _update_calibration(self, ts: float, a_lat: float, a_lon: float, yaw: float) -> None:
+        if self._calibration_start_ts is None:
+            self._calibration_start_ts = ts
+
+        if self._is_plausible(a_lat, a_lon, yaw):
+            self._calibration_samples.append((a_lat, a_lon, yaw))
+
+        if (ts - self._calibration_start_ts) >= self._calibration_duration_s:
+            if not self._calibration_samples:
+                self._calibration_start_ts = None
+                return
+
+            n = len(self._calibration_samples)
+
+            self._bias_a_lat = sum(x[0] for x in self._calibration_samples) / n
+            self._bias_a_lon = sum(x[1] for x in self._calibration_samples) / n
+            self._bias_yaw = sum(x[2] for x in self._calibration_samples) / n
+
+            self._calibrated = True
+            self._calibration_samples.clear()
+            self._ema = None
+
+    def reset_calibration(self) -> None:
+        self._calibrated = False
+        self._calibration_start_ts = None
+        self._calibration_samples.clear()
+
+        self._bias_a_lat = 0.0
+        self._bias_a_lon = 0.0
+        self._bias_yaw = 0.0
+
+        self._raw = None
+        self._ema = None
+
+    def is_calibrated(self) -> bool:
+        return self._calibrated
+
+    def get_bias(self) -> tuple[float, float, float]:
+        return self._bias_a_lat, self._bias_a_lon, self._bias_yaw
 
     def _read_file_if_updated(self) -> None:
         try:
@@ -74,21 +111,39 @@ class ImuStateReader:
             return
 
         self._last_mtime = st.st_mtime
-        self._raw = ImuSample(ts=ts, a_lat_mps2=a_lat, a_lon_mps2=a_lon, yaw_rate_rad_s=yaw)
+
+        if not self._is_plausible(a_lat, a_lon, yaw):
+            return
+
+        if not self._calibrated:
+            self._update_calibration(ts, a_lat, a_lon, yaw)
+            return
+
+        a_lat -= self._bias_a_lat
+        a_lon -= self._bias_a_lon
+        yaw -= self._bias_yaw
+
+        self._raw = ImuSample(
+            ts=ts,
+            a_lat_mps2=a_lat,
+            a_lon_mps2=a_lon,
+            yaw_rate_rad_s=yaw,
+        )
 
     def get_latest(self, now: Optional[float] = None) -> Optional[ImuSample]:
-        """
-        Return latest *smoothed* IMU sample, or None if data is missing / too old.
-        """
         if now is None:
             now = time.time()
 
         self._read_file_if_updated()
+
+        if not self._calibrated:
+            return None
+
         if not self._raw:
             return None
 
         if (now - self._raw.ts) > self._max_age_s:
-            # Too old compared to race tick, treat as unavailable
+            self._ema = None
             return None
 
         if self._ema is None:
@@ -97,6 +152,7 @@ class ImuStateReader:
             a = self._alpha
             r = self._raw
             e = self._ema
+
             self._ema = ImuSample(
                 ts=r.ts,
                 a_lat_mps2=a * r.a_lat_mps2 + (1.0 - a) * e.a_lat_mps2,
@@ -105,4 +161,3 @@ class ImuStateReader:
             )
 
         return self._ema
-
